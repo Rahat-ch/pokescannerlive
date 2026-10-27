@@ -57,6 +57,7 @@ class Trigger:
     confirm_changes: int = 2
 
     present: bool = field(default=False, init=False)
+    presentation: int = field(default=0, init=False)  # counts cards brought into frame
     status: Status = field(default=Status.NO_CARD, init=False)
     _quad: np.ndarray | None = field(default=None, init=False)
     _last_seen: float = field(default=float("-inf"), init=False)
@@ -77,6 +78,7 @@ class Trigger:
         quad = np.asarray(quad, np.float32)
         if not self.present:
             self.present = True
+            self.presentation += 1
             self._still_since = now
         elif self._moved(quad, now - self._last_seen):
             self._still_since = now

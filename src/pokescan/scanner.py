@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -58,16 +58,27 @@ def close_look(detector: CardDetector, full: np.ndarray, polled: Detection) -> L
 
 @dataclass
 class Capture:
-    """A scanned card waiting to be named and priced."""
+    """A scanned card on its way to the total."""
     id: int
     at: str
     crop: str  # file name under the crops directory
     confidence: float
     sharpness: float
+    presentation: int = 0  # which time a card was brought into frame; same number = never lowered
+    # "manual": no identifier, type it in. "identifying": reading and looking it up.
+    # "pick variant": card known, choose its printing. "pick card": choose from `candidates`.
+    # "unknown": not identified, type it in.
+    state: str = "manual"
+    name: str | None = None        # best reading so far, shown on stream
+    card: dict | None = None       # the matched card, for "pick variant"
+    candidates: list = field(default_factory=list)
+    message: str | None = None
 
     def to_json(self) -> dict:
         return {"id": self.id, "at": self.at, "crop": self.crop,
-                "confidence": round(self.confidence, 3), "sharpness": round(self.sharpness, 3)}
+                "confidence": round(self.confidence, 3), "sharpness": round(self.sharpness, 3),
+                "state": self.state, "name": self.name, "card": self.card,
+                "candidates": self.candidates, "message": self.message}
 
 
 class Scanner:
@@ -78,6 +89,7 @@ class Scanner:
         self.detector = detector
         self.crops_dir = crops_dir
         self.on_change = on_change
+        self.on_capture: Callable[[Capture], None] | None = None  # set when cards are identified
         self.trigger = Trigger(compare=compare)
         self.captures: deque[Capture] = deque(maxlen=20)
         self.connected = False
@@ -101,6 +113,14 @@ class Scanner:
         if changed:
             self._changed()
         return changed
+
+    def get(self, capture_id: int) -> Capture | None:
+        return next((c for c in self.captures if c.id == capture_id), None)
+
+    def update(self, capture: Capture, **fields) -> None:
+        for name, value in fields.items():
+            setattr(capture, name, value)
+        self._changed()
 
     def take(self, crop_name: str) -> None:
         """A capture was used for a scan: drop it from the pending list."""
@@ -165,11 +185,15 @@ class Scanner:
         self.crops_dir.mkdir(parents=True, exist_ok=True)
         # Saved before anything else uses it, so every scan is kept for review and testing.
         cv2.imwrite(str(self.crops_dir / name), look.crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        self.captures.append(Capture(self._next_id, at.isoformat(timespec="seconds"), name,
-                                     look.confidence, look.sharpness))
+        capture = Capture(self._next_id, at.isoformat(timespec="seconds"), name, look.confidence,
+                          look.sharpness, self.trigger.presentation,
+                          state="identifying" if self.on_capture else "manual")
+        self.captures.append(capture)
         self._next_id += 1
         log.info("scanned card %s (sharpness %.2f)", name, look.sharpness)
         self._changed()
+        if self.on_capture:
+            self.on_capture(capture)
 
 
 def replay(detector: CardDetector, frames: list[Path], hz: float, poll_width: int = POLL_WIDTH):

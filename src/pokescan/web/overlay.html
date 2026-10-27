@@ -153,15 +153,24 @@
     popUp({ kind: "scan", id: scan.id }, holdMs);
   }
 
-  function showCapture(capture) {
+  // A scanned card before it's priced: its name as soon as it's read, then set and number once matched.
+  function fillCapture(capture) {
     setArt(capture.crop);
-    pullEl.querySelector(".name").textContent = "New pull!";
-    pullEl.querySelector(".meta").hidden = true;
+    const card = capture.card;
+    const name = (card && card.name) || capture.name;
+    pullEl.querySelector(".name").textContent = name || "Identifying…";
+    const meta = pullEl.querySelector(".meta");
+    meta.textContent = card ? [card.set_name, card.number && `#${card.number}`].filter(Boolean).join(" · ") : "";
+    meta.hidden = !meta.textContent;
     pullEl.querySelector(".variant").hidden = true;
     pullEl.querySelector(".repeat").hidden = true;
     const price = pullEl.querySelector(".price");
-    price.textContent = "Pricing…";
+    price.textContent = name ? "Pricing…" : "";
     price.classList.add("pending");
+  }
+
+  function showCapture(capture) {
+    fillCapture(capture);
     popUp({ kind: "capture", crop: capture.crop }, PENDING_MAX_MS);
   }
 
@@ -182,7 +191,11 @@
     if (!shown) return;
     // Undone or dismissed: take it down now rather than leave a wrong card or price up.
     if (shown.kind === "scan" && (!last || last.id !== shown.id)) hidePull();
-    if (shown.kind === "capture" && !captures.some(c => c.crop === shown.crop)) hidePull();
+    if (shown.kind === "capture") {
+      const current = captures.find(c => c.crop === shown.crop);
+      if (current) fillCapture(current);  // name read, or card matched: update in place
+      else hidePull();
+    }
   }
 
   let retry = 500;

@@ -25,9 +25,31 @@ SOCKETS = web.AppKey("sockets", weakref.WeakSet)
 SCANNER = web.AppKey("scanner", object)  # pokescan.scanner.Scanner, or None when scanning is off
 CROPS = web.AppKey("crops", object)  # Path of the crops directory, or None
 
+IDENTIFIER = web.AppKey("identifier", object)  # pokescan.identify.Identifier, or None without Scrydex
+SETTINGS = web.AppKey("settings", object)  # Settings
+
 CROP_NAME = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]{4}\.jpg$")
 
 PAGES = files("pokescan") / "web"
+
+
+class Settings:
+    """Small choices that outlive a run, such as the set being opened on stream."""
+
+    def __init__(self, path: Path | None):
+        self.path = path
+        try:
+            self.values = json.loads(path.read_text()) if path else {}
+        except (OSError, ValueError):
+            self.values = {}
+
+    def get(self, key: str, default=None):
+        return self.values.get(key, default)
+
+    def set(self, key: str, value) -> None:
+        self.values[key] = value
+        if self.path:
+            self.path.write_text(json.dumps(self.values, indent=2))
 
 
 def load_token(data_dir: Path) -> str:
@@ -56,6 +78,8 @@ async def guard(request: web.Request, handler):
 def full_state(app: web.Application) -> dict:
     state = app[STORE].state()
     state["scanner"] = app[SCANNER].snapshot() if app[SCANNER] else None
+    state["identify"] = app[IDENTIFIER] is not None
+    state["stream_set"] = app[SETTINGS].get("stream_set")
     return state
 
 
@@ -155,6 +179,52 @@ async def dismiss_capture(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+def identifier(request: web.Request):
+    if not request.app[IDENTIFIER]:
+        raise web.HTTPNotFound(text="card lookup is off: run `pokescan login` to add a Scrydex key")
+    return request.app[IDENTIFIER]
+
+
+async def scrydex_call(call):
+    """Run a Scrydex-backed call, turning its failures into an error the dock can show."""
+    from pokescan.scrydex import ScrydexError
+    try:
+        return await call
+    except ScrydexError as e:
+        raise web.HTTPBadGateway(text=str(e))
+
+
+async def search_sets(request: web.Request) -> web.Response:
+    found = await scrydex_call(identifier(request).scrydex.expansions(request.query.get("q", "")))
+    return web.json_response(found)
+
+
+async def choose_set(request: web.Request) -> web.Response:
+    body = await request.json()
+    chosen = {"id": str(body["id"]), "name": str(body.get("name") or body["id"])} if body.get("id") else None
+    request.app[SETTINGS].set("stream_set", chosen)
+    await broadcast(request.app)
+    return web.json_response(chosen)
+
+
+async def search_cards(request: web.Request) -> web.Response:
+    found = await scrydex_call(identifier(request).search(request.query.get("q", "")))
+    return web.json_response(found)
+
+
+async def choose_card(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        call = identifier(request).choose(int(request.match_info["capture_id"]), str(body["card_id"]), str(body["variant"]))
+        scan = await scrydex_call(call)
+    except LookupError as e:
+        raise web.HTTPNotFound(text=str(e))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise web.HTTPBadRequest(text=str(e) or "expected {card_id, variant}")
+    await broadcast(request.app)
+    return web.json_response(scan.to_json(), status=201)
+
+
 async def run_scanner(app: web.Application):
     """Run the scanner for the server's lifetime, pushing its changes to every page."""
     scanner = app[SCANNER]
@@ -163,11 +233,15 @@ async def run_scanner(app: web.Application):
         return
     loop = asyncio.get_running_loop()
     scanner.on_change = lambda: loop.create_task(broadcast(app))
+    if app[IDENTIFIER]:
+        app[IDENTIFIER].on_added = lambda scan: loop.create_task(broadcast(app))
     task = asyncio.create_task(scanner.run())
     yield
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+    if app[IDENTIFIER]:
+        await app[IDENTIFIER].close()
 
 
 async def export_csv(request: web.Request) -> web.Response:
@@ -181,13 +255,16 @@ async def export_csv(request: web.Request) -> web.Response:
     )
 
 
-def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | None = None) -> web.Application:
+def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | None = None,
+             identifier=None, settings: "Settings | None" = None) -> web.Application:
     app = web.Application(middlewares=[guard])
     app[STORE] = store
     app[TOKEN] = token
     app[SOCKETS] = weakref.WeakSet()
     app[SCANNER] = scanner
     app[CROPS] = crops_dir
+    app[IDENTIFIER] = identifier
+    app[SETTINGS] = settings or Settings(None)
     app.cleanup_ctx.append(run_scanner)
     app.router.add_get("/", index)
     app.router.add_get("/overlay", page("overlay.html"))
@@ -202,4 +279,8 @@ def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | No
     app.router.add_get("/export.csv", export_csv)
     app.router.add_get("/crops/{name}", crop)
     app.router.add_post(r"/captures/{capture_id:\d+}/dismiss", dismiss_capture)
+    app.router.add_post(r"/captures/{capture_id:\d+}/choose", choose_card)
+    app.router.add_get("/sets", search_sets)
+    app.router.add_post("/settings/set", choose_set)
+    app.router.add_get("/cards", search_cards)
     return app

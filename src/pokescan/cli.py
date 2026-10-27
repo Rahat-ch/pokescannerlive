@@ -100,6 +100,23 @@ def cmd_replay(args) -> int:
     return 0
 
 
+def cmd_login(args) -> int:
+    """Ask for the Scrydex key and team ID without echoing them, and store them privately."""
+    import getpass
+
+    from pokescan import credentials
+
+    print("Find these in your Scrydex dashboard. Nothing you type is shown.")
+    key = getpass.getpass("Scrydex API key: ").strip()
+    team = getpass.getpass("Scrydex team ID: ").strip()
+    if not key or not team:
+        print("error: both are needed", file=sys.stderr)
+        return 1
+    path = credentials.save_scrydex(args.data_dir, key, team)
+    print(f"saved to {path} (readable only by you). Restart `pokescan serve` to use it.")
+    return 0
+
+
 def cmd_serve(args) -> int:
     import logging
 
@@ -114,21 +131,39 @@ def cmd_serve(args) -> int:
     store = SessionStore(args.data_dir / "pokescan.db")
     token = load_token(args.data_dir)
     base = f"http://127.0.0.1:{args.port}"
-    scanner = None
+    from pokescan.server import Settings
+
+    settings = Settings(args.data_dir / "settings.json")
+    scanner = identifier = None
     crops_dir = args.data_dir / "crops"
     if args.source:
+        from pokescan import credentials, ocr
         from pokescan.detect import CardDetector, ensure_model
         from pokescan.scanner import Scanner
 
         scanner = Scanner(obs_settings(), args.source, CardDetector(ensure_model(args.data_dir)), crops_dir)
         print(f"scanning OBS source {args.source!r}")
+        keys = credentials.scrydex(args.data_dir)
+        if keys and ocr.available():
+            from pokescan.identify import Identifier
+            from pokescan.scrydex import Cache, Scrydex
+
+            stream_set = lambda: (settings.get("stream_set") or {}).get("id")
+            identifier = Identifier(Scrydex(*keys, cache=Cache(args.data_dir / "scrydex-cache.db")),
+                                    store, scanner, crops_dir, stream_set, images_dir=args.data_dir / "card-images")
+            print("identifying scanned cards (read on this Mac) and pricing them with Scrydex")
+        elif not keys:
+            print("identification off: run `pokescan login` to add a Scrydex key; scans wait to be typed in")
+        else:
+            print("identification off: reading card text needs macOS; scans wait to be typed in")
     else:
         print("scanning off: add --source <OBS camera input> to scan held-up cards")
     print(f"session {store.session_id}, started {store.started_at()}")
     print(f"overlay (OBS Browser Source, at your canvas size): {base}/overlay?token={token}")
     print(f"control (OBS Docks → Custom Browser Docks): {base}/control?token={token}")
     try:
-        web.run_app(make_app(store, token, scanner, crops_dir), host="127.0.0.1", port=args.port, print=None)
+        web.run_app(make_app(store, token, scanner, crops_dir, identifier, settings),
+                    host="127.0.0.1", port=args.port, print=None)
     finally:
         store.close()
     return 0
@@ -164,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
     replay_.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan")
     replay_.set_defaults(func=cmd_replay)
 
+    login = sub.add_parser("login", help="store your Scrydex API key and team ID")
+    login.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan")
+    login.set_defaults(func=cmd_login)
+
     serve = sub.add_parser("serve", help="run the overlay and control dock for a stream")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan",
@@ -173,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
-    if args.func in (cmd_serve, cmd_replay):
+    if args.func in (cmd_serve, cmd_replay, cmd_login):
         return args.func(args)
     try:
         return asyncio.run(args.func(args))

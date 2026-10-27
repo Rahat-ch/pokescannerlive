@@ -67,6 +67,19 @@
   li .thumb.small { width: 28px; height: 39px; }
   #attached { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
   #attached .thumb { width: 72px; height: 100px; }
+  .capture { display: block; }
+  .capture .top { display: flex; gap: 10px; align-items: flex-start; }
+  .choices { margin: 8px 0 2px 64px; display: grid; gap: 6px; }
+  .choice { display: flex; gap: 8px; align-items: center; }
+  .choice img { width: 36px; height: 50px; object-fit: cover; border-radius: 3px; flex: none; }
+  .variants { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .variants button { padding: 4px 8px; font-size: 12px; }
+  .variants button.best { border-color: var(--accent); }
+  .msg { font-size: 12px; color: var(--muted); }
+  .find { display: flex; gap: 6px; margin-top: 6px; }
+  #set-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; }
+  #set-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #set-results button { display: block; width: 100%; text-align: left; margin-top: 4px; font-weight: 500; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -82,6 +95,12 @@
   <section id="scanner" hidden>
     <div class="head"><h2>Scanner</h2><span class="pill" id="scan-status">starting…</span></div>
     <div class="problem" id="scan-problem" hidden></div>
+    <div id="set-box" hidden>
+      <div id="set-row"><span class="msg">Set:</span><span class="name" id="set-name">any</span>
+        <button type="button" id="set-change">Choose</button><button type="button" id="set-clear" hidden>Clear</button></div>
+      <div class="find" id="set-find" hidden><input id="set-q" placeholder="Set name, e.g. Surging Sparks"><button type="button" id="set-go">Find</button></div>
+      <div id="set-results"></div>
+    </div>
     <ul id="captures"></ul>
   </section>
 
@@ -179,14 +198,103 @@
   const STATUS_CLASS = { "card held": "held", "waiting for focus": "focus", "scanned": "scanned" };
   let autoAttached = null;
 
-  function renderScanner(scanner) {
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+
+  function variantButtons(captureId, card) {
+    const row = el("div", "variants");
+    const priced = card.variants.filter(v => v.price !== null);
+    for (const v of priced) {
+      const b = el("button", "", `${v.label} ${money(v.price, v.currency)}`);
+      b.type = "button";
+      b.onclick = () => api(`/captures/${captureId}/choose`, { card_id: card.card_id, variant: v.name })
+        .then(scan => say(`Added ${scan.name} (${scan.variant}), ${money(scan.price, scan.currency)}`, "ok"))
+        .catch(e => say(e.message, "error"));
+      row.append(b);
+    }
+    if (!priced.length) row.append(el("span", "msg", "No price on Scrydex"));
+    return row;
+  }
+
+  function cardChoice(captureId, card) {
+    const row = el("div", "choice");
+    if (card.image) { const img = el("img"); img.src = card.image; img.alt = ""; row.append(img); }
+    const what = el("div", "what");
+    what.append(el("div", "n", card.name), el("div", "m", [card.set_name, card.number && `#${card.number}`].filter(Boolean).join(" · ")));
+    what.append(variantButtons(captureId, card));
+    row.append(what);
+    return row;
+  }
+
+  function findBox(captureId, initial) {
+    const box = el("div");
+    const row = el("div", "find");
+    const q = el("input"); q.placeholder = "Search Scrydex, e.g. Ogerpon"; q.value = initial || "";
+    const go = el("button", "", "Find"); go.type = "button";
+    const results = el("div", "choices");
+    const run = () => api_get(`/cards?q=${encodeURIComponent(q.value)}`)
+      .then(cards => results.replaceChildren(...(cards.length ? cards.map(c => cardChoice(captureId, c)) : [el("div", "msg", "Nothing found.")])))
+      .catch(e => say(e.message, "error"));
+    go.onclick = run;
+    q.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); run(); } };
+    row.append(q, go);
+    box.append(row, results);
+    return box;
+  }
+
+  // Keep a capture's search box and results while state updates re-render the list.
+  const openFinds = new Map();
+  let capturesKey = null;
+
+  function captureItem(c, identify) {
+    const li = el("li", "capture");
+    const top = el("div", "top");
+    const what = el("div", "what");
+    const card = c.card;
+    const title = (card && card.name) || c.name || (c.state === "identifying" ? "Reading card…" : "Scanned card");
+    what.append(el("div", "n", title));
+    const sub = card ? [card.set_name, card.number && `#${card.number}`].filter(Boolean).join(" · ")
+      : `${new Date(c.at).toLocaleTimeString()} · sharpness ${c.sharpness.toFixed(2)}`;
+    what.append(el("div", "m", sub));
+    if (c.message) what.append(el("div", "msg", c.message));
+    const actions = el("div");
+    if (c.state === "unknown" || c.state === "manual") {
+      const add = el("button", "", "Type in"); add.type = "button";
+      add.onclick = () => { attach(c.crop); $("name").focus(); };
+      actions.append(add);
+    }
+    const dismiss = el("button", "", "Dismiss"); dismiss.type = "button";
+    dismiss.onclick = () => {
+      if ($("crop").value === c.crop) attach(null);
+      api(`/captures/${c.id}/dismiss`).catch(e => say(e.message, "error"));
+    };
+    actions.append(dismiss);
+    top.append(thumb(c.crop), what, actions);
+    li.append(top);
+
+    const choices = el("div", "choices");
+    if (c.state === "pick variant" && card) choices.append(variantButtons(c.id, card));
+    if (c.state === "pick card") choices.append(...c.candidates.map(cand => cardChoice(c.id, cand)));
+    if (c.state === "unknown" && identify) {
+      if (!openFinds.has(c.crop)) openFinds.set(c.crop, findBox(c.id, c.name));
+      choices.append(openFinds.get(c.crop));
+    }
+    if (choices.childNodes.length) li.append(choices);
+    return li;
+  }
+
+  function renderScanner(scanner, state) {
     $("scanner").hidden = !scanner;
     if (!scanner) return;
-    // A fresh scan goes straight into the form, unless a card is already being typed in.
-    const newest = scanner.captures[0];
-    if (newest && newest.crop !== autoAttached && !$("crop").value && !$("name").value) {
-      autoAttached = newest.crop;
-      attach(newest.crop);
+    // A scan that needs typing in goes straight into the form, unless a card is already being typed.
+    const typeable = scanner.captures.find(c => c.state === "manual" || (c.state === "unknown" && !state.identify));
+    if (typeable && typeable.crop !== autoAttached && !$("crop").value && !$("name").value) {
+      autoAttached = typeable.crop;
+      attach(typeable.crop);
       $("name").focus();
     }
     const status = $("scan-status");
@@ -194,40 +302,46 @@
     status.className = "pill " + (scanner.connected ? (STATUS_CLASS[scanner.status] || "") : "down");
     $("scan-problem").hidden = !scanner.problem;
     $("scan-problem").textContent = scanner.problem || "";
+    $("set-box").hidden = !state.identify;
+    $("set-name").textContent = state.stream_set ? state.stream_set.name : "any";
+    $("set-clear").hidden = !state.stream_set;
+    // Status changes several times a second; only rebuild the list when the scans change,
+    // so typing in a search box isn't interrupted.
+    const key = JSON.stringify([scanner.captures, state.identify]);
+    if (key === capturesKey) return;
+    capturesKey = key;
+    const live = new Set(scanner.captures.map(c => c.crop));
+    for (const crop of openFinds.keys()) if (!live.has(crop)) openFinds.delete(crop);
     if (!scanner.captures.length) {
-      const li = document.createElement("li");
-      li.className = "empty";
-      li.textContent = `Hold a card up to ${scanner.source} and keep it steady for a moment.`;
-      $("captures").replaceChildren(li);
+      $("captures").replaceChildren(el("li", "empty", `Hold a card up to ${scanner.source} and keep it steady for a moment.`));
       return;
     }
-    $("captures").replaceChildren(...scanner.captures.slice(0, 5).map(c => {
-      const li = document.createElement("li");
-      const what = document.createElement("div");
-      what.className = "what";
-      const n = document.createElement("div");
-      n.className = "n";
-      n.textContent = "Scanned card";
-      const m = document.createElement("div");
-      m.className = "m";
-      m.textContent = `${new Date(c.at).toLocaleTimeString()} · sharpness ${c.sharpness.toFixed(2)}`;
-      what.append(n, m);
-      const add = document.createElement("button");
-      add.type = "button"; add.textContent = "Add";
-      add.onclick = () => { attach(c.crop); $("name").focus(); };
-      const dismiss = document.createElement("button");
-      dismiss.type = "button"; dismiss.textContent = "Dismiss";
-      dismiss.onclick = () => {
-        if ($("crop").value === c.crop) attach(null);
-        api(`/captures/${c.id}/dismiss`).catch(e => say(e.message, "error"));
-      };
-      li.append(thumb(c.crop), what, add, dismiss);
-      return li;
-    }));
+    $("captures").replaceChildren(...scanner.captures.slice(0, 5).map(c => captureItem(c, state.identify)));
   }
 
+  async function api_get(path) {
+    const res = await fetch(path, { headers: { "X-Pokescan-Token": token } });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  $("set-change").onclick = () => { $("set-find").hidden = false; $("set-q").focus(); };
+  $("set-clear").onclick = () => api("/settings/set", {}).catch(e => say(e.message, "error"));
+  const findSets = () => api_get(`/sets?q=${encodeURIComponent($("set-q").value)}`)
+    .then(sets => $("set-results").replaceChildren(...sets.map(x => {
+      const b = el("button", "", `${x.name}${x.release_date ? ` (${x.release_date.slice(0, 4)})` : ""}`);
+      b.type = "button";
+      b.onclick = () => api("/settings/set", { id: x.id, name: x.name })
+        .then(() => { $("set-results").replaceChildren(); $("set-find").hidden = true; $("set-q").value = ""; })
+        .catch(e => say(e.message, "error"));
+      return b;
+    })))
+    .catch(e => say(e.message, "error"));
+  $("set-go").onclick = findSets;
+  $("set-q").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); findSets(); } };
+
   function render(state) {
-    renderScanner(state.scanner);
+    renderScanner(state.scanner, state);
     const totals = state.totals.length ? state.totals : [{ currency: "USD", amount: "0" }];
     $("amount").replaceChildren(...totals.map((t, i) => {
       const el = document.createElement(i ? "small" : "span");
