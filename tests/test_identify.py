@@ -63,6 +63,11 @@ def test_parse_trainer_has_no_hp():
     assert (text.name, text.hp) == ("Black Belt's Training", None)
 
 
+def test_parse_hp_with_the_type_symbol_misread_after_it():
+    lines = [Line("Glaceon", 0.01, 0.23, 0.05, 1), Line("-120 €", 0.03, 0.73, 0.05, 1)]
+    assert parse(lines).hp == 120
+
+
 def test_parse_fixes_common_digit_misreads():
     assert parse([Line("Ol0/O84", 0.95, 0.1, 0.03, 1)]).number == "010"
 

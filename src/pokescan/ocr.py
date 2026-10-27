@@ -15,7 +15,7 @@ from pathlib import Path
 # Words in the top strip that aren't the card's name.
 NOT_NAMES = re.compile(r"^(basic|stage\s*\d?|supporter|trainer|item|stadium|tool|pok[eé]mon tool|tera|"
                        r"special energy|energy|ace spec|evolves from.*)$", re.I)
-HP = re.compile(r"(\d{2,3})\s*$")
+HP = re.compile(r"(\d{2,3})\D{0,3}$")  # the type symbol after it can read as "€" or "©"
 NUMBER = re.compile(r"(\d{1,3})\s*/\s*(\d{2,3})")
 # Common misreads in the tiny collector number.
 DIGITS = str.maketrans({"O": "0", "o": "0", "о": "0", "О": "0", "D": "0", "I": "1", "l": "1", "S": "5", "B": "8", "к": "4"})
