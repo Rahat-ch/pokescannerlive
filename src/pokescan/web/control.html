@@ -89,6 +89,10 @@
       <div><h2>Session total</h2><div class="amount" id="amount">$0.00</div></div>
       <div style="text-align:right"><div class="count" id="count">0 cards</div><div id="conn">connecting…</div></div>
     </div>
+    <div id="last-card" hidden>
+      <div class="msg" style="margin-top:10px">Last card: <span id="last-name"></span> · printing:</div>
+      <div class="variants" id="last-variants"></div>
+    </div>
     <div class="actions"><button id="undo" title="Remove the last card from the total">Undo last</button></div>
   </section>
 
@@ -340,7 +344,25 @@
   $("set-go").onclick = findSets;
   $("set-q").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); findSets(); } };
 
+  // Switch the last card's printing in one click; the price on stream and the total follow.
+  function renderLastCard(state) {
+    const last = state.last, options = state.last_variants;
+    $("last-card").hidden = !(last && options && options.length > 1);
+    if ($("last-card").hidden) return;
+    $("last-name").textContent = last.name;
+    $("last-variants").replaceChildren(...options.map(v => {
+      const b = el("button", v.label === last.variant ? "best" : "", `${v.label} ${money(v.price, v.currency)}`);
+      b.type = "button";
+      b.disabled = v.label === last.variant;
+      b.onclick = () => api(`/scans/${last.id}/variant`, { variant: v.name })
+        .then(scan => say(`${scan.name} is now ${scan.variant}, ${money(scan.price, scan.currency)}`, "ok"))
+        .catch(e => say(e.message, "error"));
+      return b;
+    }));
+  }
+
   function render(state) {
+    renderLastCard(state);
     renderScanner(state.scanner, state);
     const totals = state.totals.length ? state.totals : [{ currency: "USD", amount: "0" }];
     $("amount").replaceChildren(...totals.map((t, i) => {

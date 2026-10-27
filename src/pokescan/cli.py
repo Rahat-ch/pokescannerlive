@@ -123,6 +123,7 @@ def cmd_serve(args) -> int:
     from aiohttp import web
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(asctime)s %(message)s")
+    sys.stdout.reconfigure(line_buffering=True)  # startup status shows up even when output goes to a file
 
     from pokescan.server import load_token, make_app
     from pokescan.session import SessionStore
@@ -148,10 +149,16 @@ def cmd_serve(args) -> int:
             from pokescan.identify import Identifier
             from pokescan.scrydex import Cache, Scrydex
 
+            from pokescan.variants import VariantJudge
+
             stream_set = lambda: (settings.get("stream_set") or {}).get("id")
+            judge = VariantJudge.from_env()
             identifier = Identifier(Scrydex(*keys, cache=Cache(args.data_dir / "scrydex-cache.db")),
-                                    store, scanner, crops_dir, stream_set, images_dir=args.data_dir / "card-images")
+                                    store, scanner, crops_dir, stream_set, images_dir=args.data_dir / "card-images",
+                                    judge=judge)
             print("identifying scanned cards (read on this Mac) and pricing them with Scrydex")
+            print("telling holo from normal with Claude Haiku via OpenRouter" if judge else
+                  "printing check off: set OPENROUTER_API_KEY to tell holo from normal; standard printing assumed")
         elif not keys:
             print("identification off: run `pokescan login` to add a Scrydex key; scans wait to be typed in")
         else:

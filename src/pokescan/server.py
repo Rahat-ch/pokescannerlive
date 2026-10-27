@@ -80,6 +80,8 @@ def full_state(app: web.Application) -> dict:
     state["scanner"] = app[SCANNER].snapshot() if app[SCANNER] else None
     state["identify"] = app[IDENTIFIER] is not None
     state["stream_set"] = app[SETTINGS].get("stream_set")
+    last = state["last"]
+    state["last_variants"] = app[IDENTIFIER].variants_for(last["card_id"]) if app[IDENTIFIER] and last else None
     return state
 
 
@@ -225,6 +227,18 @@ async def choose_card(request: web.Request) -> web.Response:
     return web.json_response(scan.to_json(), status=201)
 
 
+async def change_variant(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        scan = await scrydex_call(identifier(request).change_variant(int(request.match_info["scan_id"]), str(body["variant"])))
+    except LookupError as e:
+        raise web.HTTPNotFound(text=str(e))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise web.HTTPBadRequest(text=str(e) or "expected {variant}")
+    await broadcast(request.app)
+    return web.json_response(scan.to_json())
+
+
 async def run_scanner(app: web.Application):
     """Run the scanner for the server's lifetime, pushing its changes to every page."""
     scanner = app[SCANNER]
@@ -280,6 +294,7 @@ def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | No
     app.router.add_get("/crops/{name}", crop)
     app.router.add_post(r"/captures/{capture_id:\d+}/dismiss", dismiss_capture)
     app.router.add_post(r"/captures/{capture_id:\d+}/choose", choose_card)
+    app.router.add_post(r"/scans/{scan_id:\d+}/variant", change_variant)
     app.router.add_get("/sets", search_sets)
     app.router.add_post("/settings/set", choose_set)
     app.router.add_get("/cards", search_cards)

@@ -7,8 +7,9 @@
    find the card; comparing the scan's artwork with each candidate's reference
    image picks the exact printing (on real scans: 41-255 matching points for
    the right printing, at most 14 for any other).
-3. One clear match with one priced variant is added to the total at once.
-   One clear match with several variants waits for a one-click variant pick.
+3. One clear match is added to the total: as the printing a fast vision model
+   sees (`variants`, when an OpenRouter key is set), else as its standard
+   printing (normal, else holo). The dock switches the variant in one click.
    No clear match offers the top three cards. Nothing found, or Scrydex
    unreachable, falls back to typing it in.
 
@@ -50,6 +51,9 @@ CONFIDENT, MARGIN = 1.0, 0.2
 ART_WEIGHT, ART_FULL_AT = 0.6, 100  # matching artwork points worth up to +0.6, in full at 100
 ART_CANDIDATES, ART_WINDOW = 5, 0.35  # compare art for up to 5 candidates within 0.35 of the best
 CARD_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+# The printing assumed for a pulled card, so its price is on stream at once; the
+# streamer switches it in one click if it's, say, a reverse holo.
+DEFAULT_VARIANTS = ("normal", "unlimited", "holofoil", "unlimitedHolofoil")
 SUFFIXES = {"ex", "gx", "v", "vmax", "vstar", "lv", "x", "break", "prime", "star"}
 
 
@@ -106,6 +110,15 @@ def art_bonus(points: int) -> float:
     return ART_WEIGHT * min(points, ART_FULL_AT) / ART_FULL_AT
 
 
+def default_variant(variants: list[dict]) -> dict | None:
+    """The standard printing among a card's priced variants: normal, else holo, else the first."""
+    priced = [v for v in variants if v["price"] is not None]
+    for name in DEFAULT_VARIANTS:
+        if chosen := next((v for v in priced if v["name"] == name), None):
+            return chosen
+    return priced[0] if priced else None
+
+
 def is_confident(ranked: list[tuple[float, dict]]) -> bool:
     if not ranked or ranked[0][0] < CONFIDENT:
         return False
@@ -130,7 +143,7 @@ class Identifier:
     def __init__(self, scrydex: Scrydex, store: SessionStore, scanner: Scanner, crops_dir: Path,
                  stream_set: Callable[[], str | None] = lambda: None, on_added=lambda scan: None,
                  read_card: Callable[[Path], CardText] = ocr.read_card, images_dir: Path | None = None,
-                 fetch_image: Callable[[str], bytes] | None = None):
+                 fetch_image: Callable[[str], bytes] | None = None, judge=None):
         self.scrydex = scrydex
         self.store = store
         self.scanner = scanner
@@ -140,6 +153,7 @@ class Identifier:
         self.read_card = read_card
         self.images_dir = images_dir
         self.fetch_image = fetch_image or download
+        self.judge = judge  # pokescan.variants.VariantJudge, or None
         self._cards: dict[str, dict] = {}  # every card seen this run, for picks without another lookup
         self._last: tuple[int, str] | None = None  # (presentation, card id) of the last card added
         self._tasks: set[asyncio.Task] = set()
@@ -176,26 +190,59 @@ class Identifier:
             log.info("dropped %s: same card as the last one, never lowered", capture.crop)
             self.scanner.dismiss(capture.id)
             return
-        priced = [v for v in card["variants"] if v["price"] is not None]
-        if len(priced) == 1:
-            self._add(capture, card, priced[0])
-        elif priced:
-            self.scanner.update(capture, state="pick variant", name=card["name"], card=card)
+        # The name, set and number go on stream now; the price follows once the printing is decided.
+        self.scanner.update(capture, name=card["name"], card=card)
+        if chosen := await self._printing(capture, card):
+            self._add(capture, card, chosen)
         else:
             self.scanner.update(capture, state="unknown", name=card["name"], card=card,
                                 message="Scrydex has no near-mint price for it. Type the price in.")
 
-    async def choose(self, capture_id: int, card_id: str, variant: str) -> Scan:
-        """The streamer picked a card and variant in the dock."""
+    async def _printing(self, capture: Capture, card: dict) -> dict | None:
+        """The variant the judge sees in the crop, else the standard printing."""
+        priced = [v for v in card["variants"] if v["price"] is not None]
+        if self.judge and len(priced) > 1:
+            jpeg = (self.crops_dir / capture.crop).read_bytes()
+            seen = await self.judge.judge(jpeg, card["name"], [v["name"] for v in priced])
+            log.info("printing of %s: %s", card["name"], seen or "unsure")
+            if chosen := self._variant(card, seen) if seen else None:
+                return chosen
+        return default_variant(priced)
+
+    async def choose(self, capture_id: int, card_id: str, variant: str | None = None) -> Scan:
+        """The streamer picked a card (and maybe its variant) in the dock."""
         capture = self.scanner.get(capture_id)
         if capture is None:
             raise LookupError("no such scan")
-        raw = self._cards.get(card_id) or await self.scrydex.card(card_id)
-        card = summary(raw)
-        chosen = next((v for v in card["variants"] if v["name"] == variant and v["price"] is not None), None)
+        card = await self._summary(card_id)
+        chosen = self._variant(card, variant) if variant else default_variant(card["variants"])
         if chosen is None:
             raise ValueError("no near-mint price for that variant. Type the price in.")
         return self._add(capture, card, chosen)
+
+    def variants_for(self, card_id: str | None) -> list[dict] | None:
+        """A card's priced variants, if this run has seen it (no lookup)."""
+        if card_id in self._cards:
+            return [v for v in summary(self._cards[card_id])["variants"] if v["price"] is not None]
+        return None
+
+    async def change_variant(self, scan_id: int, variant: str) -> Scan:
+        """Switch a counted card to another printing, with that printing's price."""
+        scan = self.store.get(scan_id)
+        if scan is None or not scan.card_id:
+            raise LookupError("no such scanned card")
+        chosen = self._variant(await self._summary(scan.card_id), variant)
+        if chosen is None:
+            raise ValueError("no near-mint price for that variant")
+        return self.store.update_variant(scan_id, chosen["label"], Decimal(chosen["price"]), chosen["currency"] or "USD")
+
+    async def _summary(self, card_id: str) -> dict:
+        raw = self._cards.get(card_id) or self._remember([await self.scrydex.card(card_id)])[0]
+        return summary(raw)
+
+    @staticmethod
+    def _variant(card: dict, name: str) -> dict | None:
+        return next((v for v in card["variants"] if v["name"] == name and v["price"] is not None), None)
 
     async def search(self, text: str) -> list[dict]:
         """Cards for a name typed into the dock, best first (the stream's set ranked up)."""
@@ -271,3 +318,5 @@ class Identifier:
         for task in list(self._tasks):
             task.cancel()
         await self.scrydex.close()
+        if self.judge:
+            await self.judge.close()

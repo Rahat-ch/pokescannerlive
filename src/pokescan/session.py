@@ -187,6 +187,15 @@ class SessionStore:
             ).rowcount
         return self.get(scan_id) if changed else None
 
+    def update_variant(self, scan_id: int, variant: str, price: Decimal, currency: str) -> Scan | None:
+        """Correct a counted card's printing and price, e.g. it was a reverse holo."""
+        with self.db:
+            changed = self.db.execute(
+                "UPDATE scans SET variant = ?, price_minor = ?, currency = ? WHERE id = ? AND session_id = ?",
+                (variant, to_minor(price, currency), currency, scan_id, self.session_id),
+            ).rowcount
+        return self.get(scan_id) if changed else None
+
     def void(self, scan_id: int) -> Scan | None:
         return self._set_voided(scan_id, self.clock())
 

@@ -175,13 +175,22 @@ async def test_one_priced_variant_is_added_at_once(env):
     assert scan["crop"] == capture.crop and scanner.taken == [capture.crop]
 
 
-async def test_several_variants_wait_for_a_pick(env):
+async def test_several_variants_add_the_standard_printing_then_switch(env):
     ident, scanner, capture, store = make(env, [card("me5-62", "Bastiodon")], CardText("Bastiodon", 160, None, None))
     await ident.identify(capture)
-    assert capture.state == "pick variant" and capture.card["name"] == "Bastiodon"
-    assert store.state()["count"] == 0
-    scan = await ident.choose(capture.id, "me5-62", "reverseHolofoil")
+    last = store.state()["last"]
+    assert (last["variant"], last["price"]) == ("Normal", "1.23")  # priced on stream at once
+    assert [v["label"] for v in ident.variants_for("me5-62")] == ["Normal", "Holo", "Reverse Holo"]
+    scan = await ident.change_variant(last["id"], "reverseHolofoil")
     assert (scan.variant, scan.price) == ("Reverse Holo", Decimal("1.06"))
+    assert store.totals() == {"USD": Decimal("1.06")}
+
+
+async def test_holo_only_card_defaults_to_holo(env):
+    cards = [card("r-1", "Charizard", hp="170", variants={"reverseHolofoil": 3.0, "holofoil": 9.5})]
+    ident, scanner, capture, store = make(env, cards, CardText("Charizard", 170, None, None))
+    await ident.identify(capture)
+    assert store.state()["last"]["variant"] == "Holo"
 
 
 async def test_ambiguous_name_offers_candidates(env):
@@ -228,3 +237,50 @@ def test_credentials_are_private_and_env_wins(tmp_path):
     assert credentials.scrydex(tmp_path, env={}) == ("key123", "team")
     assert credentials.scrydex(tmp_path, env={"SCRYDEX_API_KEY": "k2", "SCRYDEX_TEAM_ID": "t2"}) == ("k2", "t2")
     assert credentials.scrydex(tmp_path / "none", env={}) is None
+
+
+# --- the printing check ----------------------------------------------------------------------
+
+class FakeJudge:
+    def __init__(self, answer):
+        self.answer, self.asked = answer, []
+
+    async def judge(self, jpeg, name, variants):
+        self.asked.append((name, variants))
+        return self.answer
+
+    async def close(self):
+        pass
+
+
+async def test_judged_printing_is_used(env):
+    ident, scanner, capture, store = make(env, [card("me5-62", "Bastiodon")], CardText("Bastiodon", 160, None, None))
+    ident.judge = FakeJudge("reverseHolofoil")
+    await ident.identify(capture)
+    assert ident.judge.asked == [("Bastiodon", ["normal", "holofoil", "reverseHolofoil"])]
+    assert (store.state()["last"]["variant"], store.state()["last"]["price"]) == ("Reverse Holo", "1.06")
+
+
+async def test_unsure_judge_falls_back_to_the_standard_printing(env):
+    ident, scanner, capture, store = make(env, [card("me5-62", "Bastiodon")], CardText("Bastiodon", 160, None, None))
+    ident.judge = FakeJudge(None)
+    await ident.identify(capture)
+    assert store.state()["last"]["variant"] == "Normal"
+
+
+async def test_single_printing_skips_the_judge(env):
+    cards = [card("pe-3", "Pinsir", hp="120", variants={"normal": 0.5})]
+    ident, scanner, capture, store = make(env, cards, CardText("Pinsir", 120, None, None))
+    ident.judge = FakeJudge("holofoil")
+    await ident.identify(capture)
+    assert ident.judge.asked == [] and store.state()["last"]["variant"] == "Normal"
+
+
+def test_judge_request_only_allows_the_cards_variants():
+    from pokescan.variants import MODEL, request_body
+    body = request_body(b"\xff\xd8jpeg", "Bastiodon", ["normal", "reverseHolofoil"])
+    assert body["model"] == MODEL == "anthropic/claude-haiku-5.5"
+    schema = body["response_format"]["json_schema"]["schema"]
+    assert schema["properties"]["variant"]["enum"] == ["normal", "reverseHolofoil", "unsure"]
+    assert body["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "Reverse Holo (the card body" in body["messages"][0]["content"][1]["text"]

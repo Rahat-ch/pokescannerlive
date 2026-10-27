@@ -94,6 +94,7 @@
   // just caught and nobody has priced yet {kind: "capture", crop}.
   let shown = null;
   let lastSeenId;    // newest scan id seen; unset until the first state, so a reload doesn't replay it
+  let lastSeenKey;   // that scan's printing and price, to catch a corrected variant
   let lastCapture;   // newest scanner crop seen; crop names sort by time, across restarts too
   let lastTotals = null;
   let hideTimer = null;
@@ -179,13 +180,17 @@
     const last = state.last;
     const captures = state.scanner ? state.scanner.captures : [];
     const newest = captures[0];
+    const key = last ? `${last.id}|${last.variant}|${last.price}` : "";
     if (lastSeenId === undefined) {
       lastSeenId = last ? last.id : 0;
+      lastSeenKey = key;
       lastCapture = newest ? newest.crop : "";
       return;
     }
     // A newly priced card, scanned or typed in. Scan ids only grow, across sessions too.
-    if (last && last.id > lastSeenId) { lastSeenId = last.id; showPull(last); return; }
+    if (last && last.id > lastSeenId) { lastSeenId = last.id; lastSeenKey = key; showPull(last); return; }
+    // The streamer corrected the printing: show the right price again.
+    if (last && last.id === lastSeenId && key !== lastSeenKey) { lastSeenKey = key; showPull(last); return; }
     // A card the scanner just caught: show it now, the price follows when it's added.
     if (newest && newest.crop > lastCapture) { lastCapture = newest.crop; showCapture(newest); return; }
     if (!shown) return;
