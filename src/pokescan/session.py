@@ -32,12 +32,13 @@ CREATE TABLE IF NOT EXISTS scans (
     source TEXT NOT NULL,          -- 'manual' until identification lands
     card_id TEXT,                  -- catalog id, once cards are identified
     voided_at TEXT,
-    crop TEXT                      -- scanner crop file, if the card was scanned
+    crop TEXT,                     -- scanner crop file, if the card was scanned
+    sound TEXT                     -- what plays on stream: 'cry:151' for a Pokémon, 'supporter', 'energy'...
 );
 """
 
 # Columns added after the first release, for databases created before them.
-MIGRATIONS = {"crop": "ALTER TABLE scans ADD COLUMN crop TEXT"}
+MIGRATIONS = {"crop": "ALTER TABLE scans ADD COLUMN crop TEXT", "sound": "ALTER TABLE scans ADD COLUMN sound TEXT"}
 
 # Currencies with no minor unit; everything else is in hundredths.
 ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW"}
@@ -91,6 +92,7 @@ class Scan:
     card_id: str | None
     voided_at: str | None
     crop: str | None = None
+    sound: str | None = None
     copy: int = 1  # 1 for the first counted copy of this card this session, 2 for the next...
 
     @property
@@ -146,7 +148,7 @@ class SessionStore:
 
     def add(self, name: str, price: str | Decimal, currency: str = "USD", set_name: str | None = None,
             number: str | None = None, variant: str | None = None, source: str = "manual",
-            card_id: str | None = None, crop: str | None = None) -> Scan:
+            card_id: str | None = None, crop: str | None = None, sound: str | None = None) -> Scan:
         name = name.strip()
         if not name:
             raise ValueError("a card needs a name")
@@ -157,9 +159,9 @@ class SessionStore:
         with self.db:
             scan_id = self.db.execute(
                 "INSERT INTO scans (session_id, added_at, name, set_name, number, variant, price_minor, currency,"
-                " source, card_id, crop) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " source, card_id, crop, sound) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.session_id, self.clock(), name, clean(set_name), clean(number), clean(variant),
-                 price_minor, currency, source, clean(card_id), clean(crop)),
+                 price_minor, currency, source, clean(card_id), clean(crop), clean(sound)),
             ).lastrowid
         return self.get(scan_id)
 
@@ -197,14 +199,14 @@ class SessionStore:
         return self.get(scan_id) if changed else None
 
     def update_card(self, scan_id: int, name: str, set_name: str | None, number: str | None, card_id: str,
-                    variant: str, price: Decimal, currency: str) -> Scan | None:
+                    variant: str, price: Decimal, currency: str, sound: str | None = None) -> Scan | None:
         """Correct which card a scan is, e.g. a reprint of the same name from another set."""
         with self.db:
             changed = self.db.execute(
                 "UPDATE scans SET name = ?, set_name = ?, number = ?, card_id = ?, variant = ?, price_minor = ?,"
-                " currency = ? WHERE id = ? AND session_id = ?",
+                " currency = ?, sound = ? WHERE id = ? AND session_id = ?",
                 (clean(name), clean(set_name), clean(number), card_id, variant, to_minor(price, currency), currency,
-                 scan_id, self.session_id),
+                 clean(sound), scan_id, self.session_id),
             ).rowcount
         return self.get(scan_id) if changed else None
 

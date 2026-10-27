@@ -25,6 +25,14 @@ Repeats count: a second copy of a card is added to the total and marked ×2 on s
 
 **Before going live, add the packs you're opening** under *Packs I'm opening* in the dock (e.g. Prismatic Evolutions). Scanned cards are matched within those sets first, which tells same-named reprints apart and costs no lookups once the sets are fetched for the day. When the scanner still can't tell lookalikes apart, it prices its best guess and the dock offers the others under **Last card**, one click to swap.
 
+## Sounds
+
+When a card's price lands on stream, a Pokémon card plays its Pokémon's cry: the original-style one for Gen 1–5, the current one for newer Pokémon. Trainers and Energy play little 8-bit sounds for their kind (Supporter, Item or Tool, Stadium, Energy), and typed-in cards a cash ping.
+
+- For viewers to hear them, the overlay's Browser Source needs **Control audio via OBS** ticked. It then gets its own slider in the Audio Mixer.
+- Cries are downloaded from [PokéAPI's collection](https://github.com/PokeAPI/cries) the first time each Pokémon is pulled and kept in `~/.pokescan/cries/`. They're the games' audio, so they aren't part of this repo.
+- To use your own sound for any kind, put a file named `supporter`, `item`, `stadium`, `energy` or `cash` (`.ogg`, `.mp3`, `.wav` or `.m4a`) in `~/.pokescan/sounds/`.
+
 ## Data
 
 Everything lives in `~/.pokescan/` (change with `--data-dir`): the session database `pokescan.db` and the URL token. The server only listens on 127.0.0.1.

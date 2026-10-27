@@ -274,7 +274,8 @@ class Identifier:
             raise ValueError("no near-mint price for that card")
         return self.store.update_card(scan_id, name=card["name"], set_name=card["set_name"], number=card["number"],
                                       card_id=card["card_id"], variant=chosen["label"],
-                                      price=Decimal(chosen["price"]), currency=chosen["currency"] or "USD")
+                                      price=Decimal(chosen["price"]), currency=chosen["currency"] or "USD",
+                                      sound=card["sound"])
 
     async def _summary(self, card_id: str) -> dict:
         raw = self._cards.get(card_id) or self._remember([await self.scrydex.card(card_id)])[0]
@@ -346,7 +347,7 @@ class Identifier:
         scan = self.store.add(
             name=card["name"], price=Decimal(variant["price"]), currency=variant["currency"] or "USD",
             set_name=card["set_name"], number=card["number"], variant=variant["label"],
-            source="scanner", card_id=card["card_id"], crop=capture.crop,
+            source="scanner", card_id=card["card_id"], crop=capture.crop, sound=card["sound"],
         )
         self._last = (capture.presentation, card["card_id"])
         self.scanner.take(capture.crop)

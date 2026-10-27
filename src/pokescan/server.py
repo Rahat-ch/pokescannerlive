@@ -17,6 +17,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
+from pokescan import sounds
 from pokescan.session import SessionStore
 
 STORE = web.AppKey("store", SessionStore)
@@ -27,6 +28,8 @@ CROPS = web.AppKey("crops", object)  # Path of the crops directory, or None
 
 IDENTIFIER = web.AppKey("identifier", object)  # pokescan.identify.Identifier, or None without Scrydex
 SETTINGS = web.AppKey("settings", object)  # Settings
+CRIES = web.AppKey("cries", object)  # pokescan.sounds.Cries, or None
+SOUNDS = web.AppKey("sounds", object)  # Path of the streamer's own sound files, or None
 
 MAX_SETS = 6  # sets of packs being opened at once
 CROP_NAME = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]{4}\.jpg$")
@@ -91,6 +94,7 @@ def full_state(app: web.Application) -> dict:
     last, ident = state["last"], app[IDENTIFIER]
     state["last_variants"] = ident.variants_for(last["card_id"]) if ident and last else None
     state["last_alternatives"] = ident.alternatives_for(last["id"]) if ident and last else None
+    state["sounds"] = sounds.custom(app[SOUNDS])
     return state
 
 
@@ -181,6 +185,21 @@ async def crop(request: web.Request) -> web.FileResponse:
     if crops is None or not CROP_NAME.match(name) or not (crops / name).is_file():
         raise web.HTTPNotFound()
     return web.FileResponse(crops / name, headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def cry(request: web.Request) -> web.FileResponse:
+    cries = request.app[CRIES]
+    path = await cries.path(int(request.match_info["dex"])) if cries else None
+    if path is None:
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Cache-Control": "private, max-age=86400", "Content-Type": "audio/ogg"})
+
+
+async def own_sound(request: web.Request) -> web.FileResponse:
+    name = request.match_info["name"]
+    if name not in sounds.custom(request.app[SOUNDS]).values():  # only the known names, nothing else in the folder
+        raise web.HTTPNotFound()
+    return web.FileResponse(request.app[SOUNDS] / name, headers={"Cache-Control": "no-cache"})
 
 
 async def dismiss_capture(request: web.Request) -> web.Response:
@@ -295,7 +314,8 @@ async def export_csv(request: web.Request) -> web.Response:
 
 
 def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | None = None,
-             identifier=None, settings: "Settings | None" = None) -> web.Application:
+             identifier=None, settings: "Settings | None" = None, cries=None,
+             sounds_dir: Path | None = None) -> web.Application:
     app = web.Application(middlewares=[guard])
     app[STORE] = store
     app[TOKEN] = token
@@ -304,6 +324,8 @@ def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | No
     app[CROPS] = crops_dir
     app[IDENTIFIER] = identifier
     app[SETTINGS] = settings or Settings(None)
+    app[CRIES] = cries
+    app[SOUNDS] = sounds_dir
     app.cleanup_ctx.append(run_scanner)
     app.router.add_get("/", index)
     app.router.add_get("/overlay", page("overlay.html"))
@@ -317,6 +339,8 @@ def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | No
     app.router.add_post("/session/new", new_session)
     app.router.add_get("/export.csv", export_csv)
     app.router.add_get("/crops/{name}", crop)
+    app.router.add_get(r"/cries/{dex:\d{1,4}}", cry)
+    app.router.add_get("/sounds/{name}", own_sound)
     app.router.add_post(r"/captures/{capture_id:\d+}/dismiss", dismiss_capture)
     app.router.add_post(r"/captures/{capture_id:\d+}/choose", choose_card)
     app.router.add_post(r"/scans/{scan_id:\d+}/variant", change_variant)

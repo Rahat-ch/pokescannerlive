@@ -16,7 +16,8 @@ def card(card_id, name, set_id="s1", set_name="Set One", number="62", total=84, 
     """A hand-made card in Scrydex's response shape."""
     variants = variants if variants is not None else {"normal": 1.23, "holofoil": 0.24, "reverseHolofoil": 1.06}
     return {
-        "id": card_id, "name": name, "hp": hp, "number": number, "printed_number": f"{int(number):03d}/{total:03d}",
+        "id": card_id, "name": name, "hp": hp, "supertype": "Pokémon" if hp else "Trainer",
+        "subtypes": ["Basic"] if hp else ["Supporter"], "national_pokedex_numbers": [127] if hp else None, "number": number, "printed_number": f"{int(number):03d}/{total:03d}",
         "language_code": lang,
         "expansion": {"id": set_id, "name": set_name, "printed_total": total},
         "images": [{"type": "front", "small": f"https://img/{card_id}/small", "medium": f"https://img/{card_id}/medium"}],
@@ -173,6 +174,7 @@ async def test_one_priced_variant_is_added_at_once(env):
     assert (scan["name"], scan["price"], scan["variant"], scan["card_id"], scan["source"]) == \
         ("Pinsir", "0.50", "Normal", "pe-3", "scanner")
     assert scan["crop"] == capture.crop and scanner.taken == [capture.crop]
+    assert scan["sound"] == "cry:127"  # Pinsir's cry plays on stream
 
 
 async def test_several_variants_add_the_standard_printing_then_switch(env):
@@ -202,7 +204,7 @@ async def test_lookalike_reprints_add_a_best_guess_that_can_be_swapped(env):
     ident, scanner, capture, store = make(env, cards, CardText("Black Belt's Training", None, None, None))
     await ident.identify(capture)
     last = store.state()["last"]
-    assert last["price"] == "0.18" and scanner.taken == [capture.crop]
+    assert last["price"] == "0.18" and scanner.taken == [capture.crop] and last["sound"] == "supporter"
     assert {c["card_id"] for c in ident.alternatives_for(last["id"])} == {"a", "b"}
     await ident.change_variant(last["id"], "reverseHolofoil")
     scan = await ident.change_card(last["id"], "b")

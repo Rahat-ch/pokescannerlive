@@ -175,22 +175,89 @@
     popUp({ kind: "capture", crop: capture.crop }, PENDING_MAX_MS);
   }
 
+  // Sounds, played when a card's price lands: a Pokémon's cry, else a little 8-bit sound for
+  // its kind, or the streamer's own file of that name. OBS lets browser sources autoplay.
+  let ownSounds = {};
+  let lastSound;  // the last scan's sound, so a corrected card plays only if its sound changed
+  const fetched = new Set();
+  const soundUrl = sound => sound && sound.startsWith("cry:")
+    ? `/cries/${encodeURIComponent(sound.slice(4))}?token=${encodeURIComponent(token)}`
+    : ownSounds[sound] && `/sounds/${encodeURIComponent(ownSounds[sound])}?token=${encodeURIComponent(token)}`;
+  // Cries come mastered at full scale; both land around -10 dB, and OBS's mixer sets the overall level.
+  const CRY_VOLUME = 0.35, SYNTH_VOLUME = 3.5;
+  let audio = null;
+  const tone = (at, freq, length, type = "square", volume = 0.09, slideTo = null) => {
+    const osc = audio.createOscillator(), gain = audio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, at);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, at + length);
+    gain.gain.setValueAtTime(volume * SYNTH_VOLUME, at);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + length);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(at);
+    osc.stop(at + length + 0.02);
+  };
+  // [seconds after start, Hz, length, wave, volume, slide to Hz]
+  const SYNTH = {
+    cash: [[0, 1976, 0.08], [0.07, 2637, 0.32, "square", 0.08]],
+    item: [[0, 1047, 0.07], [0.06, 1319, 0.07], [0.12, 1568, 0.07], [0.18, 2093, 0.22, "square", 0.08]],
+    supporter: [[0, 523, 0.12], [0.11, 659, 0.12], [0.22, 784, 0.12], [0.33, 1047, 0.5, "square", 0.08],
+                [0.33, 523, 0.5, "triangle", 0.18]],
+    stadium: [[0, 262, 0.9, "triangle", 0.22], [0, 392, 0.9, "triangle", 0.16], [0.05, 523, 0.85, "square", 0.05]],
+    energy: [[0, 180, 0.28, "sawtooth", 0.07, 1800], [0.22, 1400, 0.12, "square", 0.06, 2600]],
+  };
+  function playSound(sound) {
+    const url = soundUrl(sound);
+    if (url) {
+      const player = new Audio(url);
+      player.volume = CRY_VOLUME;
+      player.play().catch(() => synth(sound.startsWith("cry:") ? "cash" : sound));
+      return;
+    }
+    synth(SYNTH[sound] ? sound : "cash");
+  }
+  function synth(name) {
+    try {
+      audio = audio || new AudioContext();
+      if (audio.state === "suspended") audio.resume();
+      const now = audio.currentTime + 0.02;
+      for (const [after, ...note] of SYNTH[name] || SYNTH.cash) tone(now + after, ...note);
+    } catch { /* no audio: the stream carries on silently */ }
+  }
+  // Fetch a matched card's cry while it's being priced, so it plays the moment the price lands.
+  function prefetch(capture) {
+    const url = capture && capture.card && soundUrl(capture.card.sound);
+    if (url && !fetched.has(url)) { fetched.add(url); fetch(url).catch(() => fetched.delete(url)); }
+  }
+
   function render(state) {
     renderTotal(state);
+    ownSounds = state.sounds || {};
     const last = state.last;
     const captures = state.scanner ? state.scanner.captures : [];
     const newest = captures[0];
     const key = last ? `${last.id}|${last.card_id}|${last.variant}|${last.price}` : "";
+    prefetch(newest);
     if (lastSeenId === undefined) {
       lastSeenId = last ? last.id : 0;
       lastSeenKey = key;
+      lastSound = last && last.sound;
       lastCapture = newest ? newest.crop : "";
       return;
     }
     // A newly priced card, scanned or typed in. Scan ids only grow, across sessions too.
-    if (last && last.id > lastSeenId) { lastSeenId = last.id; lastSeenKey = key; showPull(last); return; }
+    if (last && last.id > lastSeenId) {
+      lastSeenId = last.id; lastSeenKey = key; lastSound = last.sound;
+      showPull(last); playSound(last.sound);
+      return;
+    }
     // The streamer corrected the printing or the card: show the right price again.
-    if (last && last.id === lastSeenId && key !== lastSeenKey) { lastSeenKey = key; showPull(last); return; }
+    if (last && last.id === lastSeenId && key !== lastSeenKey) {
+      lastSeenKey = key;
+      showPull(last);
+      if (last.sound !== lastSound) { lastSound = last.sound; playSound(last.sound); }
+      return;
+    }
     // A card the scanner just caught: show it now, the price follows when it's added.
     if (newest && newest.crop > lastCapture) { lastCapture = newest.crop; showCapture(newest); return; }
     if (!shown) return;

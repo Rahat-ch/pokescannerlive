@@ -53,6 +53,21 @@ def near_mint(variant: dict) -> Price | None:
     return None
 
 
+# Trainer subtypes, in the order they're checked: an ACE SPEC Item is an item.
+TRAINER_SOUNDS = (("supporter", "supporter"), ("stadium", "stadium"), ("tool", "item"), ("item", "item"))
+
+
+def sound(card: dict) -> str | None:
+    """What plays on stream for a card: its Pokémon's cry ('cry:151'), else a sound for its kind."""
+    supertype = (card.get("supertype") or "").casefold()
+    if supertype.startswith("pok") and (dex := next(iter(card.get("national_pokedex_numbers") or []), None)):
+        return f"cry:{int(dex)}"
+    if supertype == "energy":
+        return "energy"
+    subtypes = " ".join(card.get("subtypes") or []).casefold()
+    return next((name for word, name in TRAINER_SOUNDS if word in subtypes), "item" if supertype == "trainer" else None)
+
+
 def summary(card: dict) -> dict:
     """What the dock and overlay need to show a card and choose a variant."""
     images = card.get("images") or [{}]
@@ -69,6 +84,7 @@ def summary(card: dict) -> dict:
         "number": card.get("printed_number") or card.get("number"),
         "hp": card.get("hp"),
         "image": images[0].get("small"),
+        "sound": sound(card),
         "variants": variants,
     }
 

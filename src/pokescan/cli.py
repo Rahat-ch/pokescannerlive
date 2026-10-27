@@ -127,6 +127,7 @@ def cmd_serve(args) -> int:
 
     from pokescan.server import load_token, make_app
     from pokescan.session import SessionStore
+    from pokescan.sounds import Cries
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
     store = SessionStore(args.data_dir / "pokescan.db")
@@ -168,9 +169,11 @@ def cmd_serve(args) -> int:
     print(f"session {store.session_id}, started {store.started_at()}")
     print(f"overlay (OBS Browser Source, at your canvas size): {base}/overlay?token={token}")
     print(f"control (OBS Docks → Custom Browser Docks): {base}/control?token={token}")
+    print(f"sounds: Pokémon cries download to {args.data_dir / 'cries'}; your own files go in {args.data_dir / 'sounds'}")
+    app = make_app(store, token, scanner, crops_dir, identifier, settings,
+                   cries=Cries(args.data_dir / "cries"), sounds_dir=args.data_dir / "sounds")
     try:
-        web.run_app(make_app(store, token, scanner, crops_dir, identifier, settings),
-                    host="127.0.0.1", port=args.port, print=None)
+        web.run_app(app, host="127.0.0.1", port=args.port, print=None)
     finally:
         store.close()
     return 0
