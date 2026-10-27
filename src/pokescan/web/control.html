@@ -177,10 +177,18 @@
   $("detach").onclick = () => attach(null);
 
   const STATUS_CLASS = { "card held": "held", "waiting for focus": "focus", "scanned": "scanned" };
+  let autoAttached = null;
 
   function renderScanner(scanner) {
     $("scanner").hidden = !scanner;
     if (!scanner) return;
+    // A fresh scan goes straight into the form, unless a card is already being typed in.
+    const newest = scanner.captures[0];
+    if (newest && newest.crop !== autoAttached && !$("crop").value && !$("name").value) {
+      autoAttached = newest.crop;
+      attach(newest.crop);
+      $("name").focus();
+    }
     const status = $("scan-status");
     status.textContent = scanner.connected ? scanner.status : "OBS not connected";
     status.className = "pill " + (scanner.connected ? (STATUS_CLASS[scanner.status] || "") : "down");

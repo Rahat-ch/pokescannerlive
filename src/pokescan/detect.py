@@ -186,15 +186,18 @@ def hamming(a: int, b: int) -> int:
     return (a ^ b).bit_count()
 
 
-# Same card or not, from two crops. Measured on 581 pairs of sharp crops from
-# real stream footage (fingers, glare, tilt): ORB inliers are decisive when high
-# (different cards never shared more than 9) but drop to ~0 for flat,
-# low-texture art in a dim frame, where the pHash is still close. Neither alone
-# separates the cards; together 546 of 581 pairs are judged right and 15 unsure.
-SAME_INLIERS = 20
-DIFFERENT_INLIERS = 10
-SAME_HASH_BITS = 18
-DIFFERENT_HASH_BITS = 22
+# Same card or not, from two crops. Only the artwork box is compared: cards from
+# one set share their frame, text boxes and layout, so whole-card features
+# matched a Bastiodon to a Silvally. Measured on 1,099 pairs of sharp crops from
+# three recorded sessions (fingers, glare, tilt, same-set holos): ORB inliers
+# are decisive when high but drop to ~0 for flat art in a dim frame, where the
+# pHash is still close. Together: no two different cards judged the same,
+# 9 of 812 same-card pairs judged different (the trigger wants two in a row).
+SAME_INLIERS = 25
+DIFFERENT_INLIERS = 12
+SAME_HASH_BITS = 14
+DIFFERENT_HASH_BITS = 20
+ART_BOX = (slice(80, 470), slice(40, 590))  # rows, columns of the 630x880 upright crop
 
 _orb = cv2.ORB_create(nfeatures=800)
 _matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
@@ -208,6 +211,8 @@ class Fingerprint:
 
 
 def fingerprint(crop: np.ndarray) -> Fingerprint:
+    """A comparable summary of a card's artwork, from an upright crop of any size."""
+    crop = cv2.resize(crop, WARP_SIZE, interpolation=cv2.INTER_AREA)[ART_BOX]
     gray = cv2.cvtColor(cv2.resize(crop, (315, 440), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
     keypoints, descriptors = _orb.detectAndCompute(gray, None)
     points = np.float32([k.pt for k in keypoints]).reshape(-1, 2)
