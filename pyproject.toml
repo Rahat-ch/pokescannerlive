@@ -3,6 +3,8 @@ name = "pokescan"
 version = "0.1.0"
 description = "Identify Pokémon cards held up on an OBS stream, price them, and keep a session total."
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "aiohttp>=3.14.5",
     "numpy>=2.5",

@@ -1,4 +1,7 @@
-pokescan includes or downloads third-party work:
+pokescan
+Copyright 2026 Rahat. Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or downloads third-party work:
 
 cardstream (https://github.com/Ximilar-com/cardstream)
   Copyright 2026 Ximilar s.r.o. Licensed under the Apache License, Version 2.0.

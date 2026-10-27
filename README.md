@@ -1,14 +1,16 @@
 # pokescan
 
-An OBS overlay for opening Pokémon TCG cards on stream. It shows each card you pull with its price and keeps a running session total. Cards are entered by hand for now; camera identification and automatic pricing come next (see [the plan](research/obs-card-scanner.md#5-recommended-architecture-and-mvp-plan)).
+An OBS overlay for opening Pokémon TCG cards on stream. It shows each card you pull with its price and keeps a running session total. Hold a card up to the camera and pokescan spots it, waits until it's steady and sharp, and puts a straightened image of it in the control dock; you type the name and price for now. Automatic identification and pricing come next (see [the plan](research/obs-card-scanner.md#5-recommended-architecture-and-mvp-plan)).
 
 ## Run it
 
 Needs [uv](https://docs.astral.sh/uv/) and OBS 28 or later.
 
 ```sh
-uv run pokescan serve
+uv run pokescan serve --source Camera
 ```
+
+`--source` is your OBS camera input (`uv run pokescan sources` lists them); leave it out to enter cards by hand only. The first run downloads the card detection model (108 MB) into `~/.pokescan/models/`.
 
 It prints two URLs. Both carry a token that stays the same between runs, so you only set OBS up once.
 
@@ -35,3 +37,7 @@ Everything lives in `~/.pokescan/` (change with `--data-dir`): the session datab
 ```sh
 uv run pytest
 ```
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE). Third-party credits, including the card detection model from [Cardstream](https://github.com/Ximilar-com/cardstream), are in [NOTICE](NOTICE).
