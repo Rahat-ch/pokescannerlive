@@ -213,6 +213,33 @@ Not reviewed (no first-party docs consulted): eBay sold-listing APIs and communi
 3. **Variant and condition errors.** These are the biggest source of wrong prices. Mitigate with operator confirmation and a visible variant label.
 4. **Unknown accuracy.** No vendor or OSS project publishes accuracy figures for real-world hand-held cards `[S26][S36]`. You need your own eval.
 5. **Effect on OBS performance of `GetSourceScreenshot` polling** (synchronous GPU readback per call `[S3]`). Measure it. The fallback is Virtual Camera in Source mode `[S11]`.
+   - **Measured 2026-10-27** with `pokescan bench`:
+     - setup: OBS 32.2.2, obs-websocket 5.7.4, macOS (Mac mini), 2560×1440 @ 30 fps canvas, Sony ZV-E1 at 1080p;
+     - one 15 s run per rate, **not** streaming or recording.
+
+     | Poll | Achieved | p50 | p95 | Max | Frame |
+     |---|---|---|---|---|---|
+     | 2 Hz, 640 px | 2.0 Hz | 3.6 ms | 8.6 ms | 15.9 ms | ~27 KB |
+     | 5 Hz, 640 px | 5.0 Hz | 5.9 ms | 7.2 ms | 21.3 ms | ~27 KB |
+     | 10 Hz, 640 px | 10.0 Hz | 2.9 ms | 6.9 ms | 7.7 ms | ~27 KB |
+     | Full-res, 1920×1080 | (back-to-back) | 11.9 ms | 14.5 ms | 14.5 ms | ~152 KB |
+
+     - **Zero** skipped render frames at every rate.
+     - Average render time stayed at 2–4 ms against a 33 ms frame budget, the same as idle.
+     - **Re-run while recording** (same setup), to cover encoder load:
+
+       | Poll | Achieved | p50 | p95 | Max |
+       |---|---|---|---|---|
+       | 2 Hz, 640 px | 2.0 Hz | 4.4 ms | 8.5 ms | 9.7 ms |
+       | 5 Hz, 640 px | 5.0 Hz | 3.4 ms | 8.0 ms | 10.5 ms |
+       | 10 Hz, 640 px | 10.0 Hz | 6.1 ms | 7.8 ms | 9.6 ms |
+       | Full-res | (back-to-back) | 11.7 ms | 21.2 ms | 21.2 ms |
+
+       Zero skipped render frames and zero skipped output (encoder) frames at every rate. Average render time was 4–7 ms, the same as idle while recording (5.4 ms).
+     - **Conclusion: polling is not a performance risk on this machine.**
+       - The Virtual Camera fallback is dropped from the MVP.
+       - Re-check on a weaker PC, or with a heavier scene, if the setup changes.
+       - Live streaming (network output) was not tested. It is not expected to differ from recording, since both encode the same canvas.
 6. **Price provenance and semantics.** Scrydex doesn't name its marketplace source `[S39]`. `market` is an average and updates at most daily `[S41]`.
 7. **Vendor cost and lock-in.** Vision costs 5 credits a scan `[S37]`, and Scrydex has no free tier `[S42]`. Keep `Identifier` and `Pricer` behind interfaces.
 8. **Non-English cards.** Scrydex prices Japanese cards in JPY `[S39]`. Your OCR models may not read them.

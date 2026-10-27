@@ -161,7 +161,7 @@ def format_report(results: list[PhaseResult], context: dict) -> str:
         size = f"{r.frame_size[0]}x{r.frame_size[1]}" if r.frame_size else "-"
         kb = f"{statistics.fmean(r.frame_bytes) / 1024:.0f}" if r.frame_bytes else "-"
         target = f"{r.target_hz:g} Hz" if r.target_hz else "-"
-        got = f"{r.achieved_hz:.1f}" if r.latencies_ms else "-"
+        got = f"{r.achieved_hz:.1f}" if r.target_hz and r.latencies_ms else "-"
         lines.append(
             f"{r.label:<10} {target:>7} {got:>6} {percentile(r.latencies_ms, 50):>7.1f} "
             f"{percentile(r.latencies_ms, 95):>7.1f} {max(r.latencies_ms, default=math.nan):>7.1f} "
