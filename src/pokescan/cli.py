@@ -61,6 +61,26 @@ async def cmd_bench(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from aiohttp import web
+
+    from pokescan.server import load_token, make_app
+    from pokescan.session import SessionStore
+
+    args.data_dir.mkdir(parents=True, exist_ok=True)
+    store = SessionStore(args.data_dir / "pokescan.db")
+    token = load_token(args.data_dir)
+    base = f"http://127.0.0.1:{args.port}"
+    print(f"session {store.session_id}, started {store.started_at()}")
+    print(f"overlay (OBS Browser Source, 1920x1080): {base}/overlay?token={token}")
+    print(f"control (OBS Docks → Custom Browser Docks): {base}/control?token={token}")
+    try:
+        web.run_app(make_app(store, token), host="127.0.0.1", port=args.port, print=None)
+    finally:
+        store.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pokescan")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -76,7 +96,15 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--save-samples", type=Path, help="directory to save one poll and one full-res frame")
     bench.set_defaults(func=cmd_bench)
 
+    serve = sub.add_parser("serve", help="run the overlay and control dock for a stream")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan",
+                       help="where the session database and URL token live")
+    serve.set_defaults(func=cmd_serve)
+
     args = parser.parse_args(argv)
+    if args.func is cmd_serve:
+        return cmd_serve(args)
     try:
         return asyncio.run(args.func(args))
     except ObsError as e:

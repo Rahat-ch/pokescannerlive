@@ -263,7 +263,7 @@ Not reviewed (no first-party docs consulted): eBay sold-listing APIs and communi
   - retry an unmatched card after 3–5 s, at most twice, then hand it to Claude or the picker;
   - wait at least 1 s between calls.
 - **Overlay correctness.** Hide the price as soon as the card moves or changes, and never let an old card's price stay on screen.
-- **Session.** A card already counted this session is not auto-added again. The dock offers "+ add another".
+- **Session.** Repeats are expected, so every new presentation of a card is added to the total, including a second copy of a card already counted. The overlay marks repeats ×2, ×3. The identity gate still stops one card held in frame, or dipping out briefly, from counting twice, and undo covers mistakes. (Decided by the user, 2026-10-27.)
 - **Robustness.**
   - Reject boxes smaller than 0.1 of the frame and quads far from card aspect.
   - Use a call guard with a 6–8 s timeout per external call.

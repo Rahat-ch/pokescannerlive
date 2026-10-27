@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pokescan overlay</title>
+<style>
+  /* OBS Browser Source: add at 1920×1080. The page is transparent outside the panels. */
+  :root {
+    --panel: rgba(16, 18, 28, 0.86);
+    --edge: rgba(255, 255, 255, 0.10);
+    --text: #f4f5f8;
+    --muted: #a7acbd;
+    --accent: #ffcb3d;
+    --repeat: #7cc4ff;
+  }
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  body {
+    width: 100vw; height: 100vh; color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .panel {
+    position: absolute; background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+  .label { font-size: 15px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+  #total { top: 40px; right: 40px; padding: 18px 26px 20px; min-width: 220px; text-align: right; }
+  #total .amounts { margin-top: 4px; }
+  #total .amount { font-size: 52px; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--accent); }
+  #total .amount + .amount { font-size: 30px; }
+  #total .count { margin-top: 6px; font-size: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #total.bump .amount:first-child { animation: bump 450ms ease-out; }
+  @keyframes bump { 0% { transform: scale(1); } 35% { transform: scale(1.08); } 100% { transform: scale(1); } }
+
+  #pull {
+    left: 40px; bottom: 48px; padding: 20px 28px 22px; min-width: 380px; max-width: 640px;
+    opacity: 0; transform: translateY(24px); transition: opacity 260ms ease, transform 260ms ease;
+  }
+  #pull.show { opacity: 1; transform: translateY(0); }
+  #pull .name { margin-top: 6px; font-size: 40px; font-weight: 800; line-height: 1.1; }
+  #pull .meta { margin-top: 6px; font-size: 20px; color: var(--muted); }
+  #pull .row { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; margin-top: 12px; }
+  #pull .price { font-size: 56px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .badges { display: flex; gap: 8px; }
+  .badge { padding: 4px 12px; border-radius: 999px; font-size: 18px; font-weight: 700; background: rgba(255, 255, 255, 0.12); }
+  .badge.repeat { background: rgba(124, 196, 255, 0.18); color: var(--repeat); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="total" class="panel">
+    <div class="label">Session total</div>
+    <div class="amounts"><div class="amount">$0.00</div></div>
+    <div class="count">0 cards</div>
+  </div>
+
+  <div id="pull" class="panel" aria-live="polite">
+    <div class="label">Pulled</div>
+    <div class="name"></div>
+    <div class="meta"></div>
+    <div class="row">
+      <div class="badges"><span class="badge variant"></span><span class="badge repeat"></span></div>
+      <div class="price"></div>
+    </div>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token") || "";
+  const holdMs = Number(params.get("hold") || 8) * 1000;
+
+  const money = (amount, currency) => {
+    try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(amount)); }
+    catch { return `${amount} ${currency}`; }
+  };
+
+  const totalEl = document.getElementById("total");
+  const pullEl = document.getElementById("pull");
+  let shownId = null;      // scan in the pop-up right now
+  let lastSeenId;          // newest scan id seen; unset until the first state, so a reload doesn't replay it
+  let lastTotals = null;
+  let hideTimer = null;
+
+  function renderTotal(state) {
+    const totals = state.totals.length ? state.totals : [{ currency: "USD", amount: "0" }];
+    const amounts = totalEl.querySelector(".amounts");
+    amounts.replaceChildren(...totals.map(t => {
+      const div = document.createElement("div");
+      div.className = "amount";
+      div.textContent = money(t.amount, t.currency);
+      return div;
+    }));
+    totalEl.querySelector(".count").textContent = `${state.count} card${state.count === 1 ? "" : "s"}`;
+    const key = JSON.stringify(state.totals);
+    if (lastTotals !== null && key !== lastTotals) {
+      totalEl.classList.remove("bump"); void totalEl.offsetWidth; totalEl.classList.add("bump");
+    }
+    lastTotals = key;
+  }
+
+  function hidePull() {
+    pullEl.classList.remove("show");
+    shownId = null;
+    clearTimeout(hideTimer);
+  }
+
+  function showPull(scan) {
+    pullEl.querySelector(".name").textContent = scan.name;
+    pullEl.querySelector(".meta").textContent = [scan.set_name, scan.number && `#${scan.number}`].filter(Boolean).join(" · ");
+    pullEl.querySelector(".meta").hidden = !scan.set_name && !scan.number;
+    const variant = pullEl.querySelector(".variant");
+    variant.textContent = scan.variant || "";
+    variant.hidden = !scan.variant;
+    const repeat = pullEl.querySelector(".repeat");
+    repeat.textContent = `×${scan.copy}`;
+    repeat.hidden = scan.copy < 2;
+    pullEl.querySelector(".price").textContent = money(scan.price, scan.currency);
+    pullEl.classList.add("show");
+    shownId = scan.id;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hidePull, holdMs);
+  }
+
+  function render(state) {
+    renderTotal(state);
+    const last = state.last;
+    if (lastSeenId === undefined) { lastSeenId = last ? last.id : 0; return; }
+    if (!last) { hidePull(); return; }
+    // Scan ids only grow, across sessions too, so a bigger id is a new pull.
+    if (last.id > lastSeenId) { lastSeenId = last.id; showPull(last); return; }
+    // The card on screen was undone: take it down now rather than leave a wrong price up.
+    if (shownId !== null && shownId !== last.id) hidePull();
+  }
+
+  let retry = 500;
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}`);
+    ws.onopen = () => { retry = 500; };
+    ws.onmessage = e => render(JSON.parse(e.data));
+    // Never show connection errors on stream; keep the last total up and retry quietly.
+    ws.onclose = () => { setTimeout(connect, retry); retry = Math.min(retry * 2, 8000); };
+  }
+  connect();
+</script>
+</body>
+</html>

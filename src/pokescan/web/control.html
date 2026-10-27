@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pokescan control</title>
+<style>
+  /* Sized for an OBS Custom Browser Dock (300–500 px wide); OBS's dark theme. */
+  :root {
+    --bg: #1d1f26; --surface: #272a33; --field: #14161b; --edge: #3a3e4a;
+    --text: #e8eaf0; --muted: #9aa0b0; --accent: #ffcb3d; --danger: #ff6b6b; --ok: #5fd38d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  h2 { margin: 0 0 6px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  section { background: var(--surface); border: 1px solid var(--edge); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .totals { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .totals .amount { font-size: 26px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .totals .amount small { display: block; font-size: 15px; }
+  .totals .count { color: var(--muted); }
+  #conn { font-size: 12px; color: var(--muted); }
+  #conn.down { color: var(--danger); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select {
+    width: 100%; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--edge);
+    background: var(--field); color: var(--text); font: inherit;
+  }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* minmax(0, …): let inputs shrink below their intrinsic width in a narrow dock. */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 8px; }
+  .price-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px; gap: 8px; }
+  button, a.button {
+    padding: 8px 12px; border-radius: 6px; border: 1px solid var(--edge); background: #343845;
+    color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:hover, a.button:hover { background: #3d4250; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1a1a1a; }
+  button.danger { color: var(--danger); }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .actions > * { flex: 1; }
+  #status { min-height: 18px; margin-top: 8px; font-size: 12px; }
+  #status.error { color: var(--danger); }
+  #status.ok { color: var(--ok); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--edge); }
+  li:first-child { border-top: 0; }
+  li .what { flex: 1; min-width: 0; }
+  li .what .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li .what .m { font-size: 12px; color: var(--muted); }
+  li .p { font-variant-numeric: tabular-nums; font-weight: 600; }
+  li.voided .what, li.voided .p { opacity: 0.45; text-decoration: line-through; }
+  li button { padding: 3px 8px; font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .url { display: flex; gap: 6px; margin-top: 4px; }
+  .url input { font-size: 12px; color: var(--muted); }
+  a.button { display: inline-block; text-align: center; text-decoration: none; }
+</style>
+</head>
+<body>
+  <section>
+    <div class="totals">
+      <div><h2>Session total</h2><div class="amount" id="amount">$0.00</div></div>
+      <div style="text-align:right"><div class="count" id="count">0 cards</div><div id="conn">connecting…</div></div>
+    </div>
+    <div class="actions"><button id="undo" title="Remove the last card from the total">Undo last</button></div>
+  </section>
+
+  <section>
+    <h2>Add a card</h2>
+    <form id="add" autocomplete="off">
+      <label for="name">Card name</label>
+      <input id="name" name="name" required placeholder="Charizard ex">
+      <div class="grid">
+        <div><label for="set_name">Set</label><input id="set_name" name="set_name" placeholder="Obsidian Flames"></div>
+        <div><label for="number">Number</label><input id="number" name="number" placeholder="125/197"></div>
+      </div>
+      <label for="variant">Variant</label>
+      <input id="variant" name="variant" list="variants" placeholder="Holo">
+      <datalist id="variants">
+        <option value="Normal"><option value="Holo"><option value="Reverse Holo">
+        <option value="1st Edition"><option value="1st Edition Holo"><option value="Full Art">
+        <option value="Alt Art"><option value="Secret Rare">
+      </datalist>
+      <div class="price-row">
+        <div><label for="price">Price</label><input id="price" name="price" required inputmode="decimal" placeholder="12.50"></div>
+        <div><label for="currency">Currency</label>
+          <select id="currency" name="currency"><option>USD</option><option>EUR</option><option>GBP</option><option>CAD</option><option>JPY</option></select>
+        </div>
+      </div>
+      <div class="actions"><button class="primary" type="submit">Add to total</button></div>
+      <div id="status" role="status"></div>
+    </form>
+  </section>
+
+  <section>
+    <h2>This session</h2>
+    <ul id="scans"></ul>
+  </section>
+
+  <section>
+    <h2>Session</h2>
+    <div class="actions">
+      <a class="button" id="export" download>Export CSV</a>
+      <button class="danger" id="new-session" type="button">New session</button>
+    </div>
+    <label for="overlay-url">Overlay URL (OBS Browser Source, 1920×1080)</label>
+    <div class="url"><input id="overlay-url" readonly><button id="copy" type="button">Copy</button></div>
+  </section>
+
+<script>
+  const token = new URLSearchParams(location.search).get("token") || "";
+  const $ = id => document.getElementById(id);
+  const money = (amount, currency) => {
+    try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(amount)); }
+    catch { return `${amount} ${currency}`; }
+  };
+
+  $("export").href = `/export.csv?token=${encodeURIComponent(token)}`;
+  $("overlay-url").value = `${location.origin}/overlay?token=${encodeURIComponent(token)}`;
+  $("copy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("overlay-url").value); say("Overlay URL copied", "ok"); }
+    catch { $("overlay-url").select(); say("Press Cmd/Ctrl+C to copy", "ok"); }
+  };
+
+  function say(text, kind = "") {
+    $("status").textContent = text;
+    $("status").className = kind;
+  }
+
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pokescan-Token": token },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  function render(state) {
+    const totals = state.totals.length ? state.totals : [{ currency: "USD", amount: "0" }];
+    $("amount").replaceChildren(...totals.map((t, i) => {
+      const el = document.createElement(i ? "small" : "span");
+      el.textContent = money(t.amount, t.currency);
+      return el;
+    }));
+    $("count").textContent = `${state.count} card${state.count === 1 ? "" : "s"}`;
+
+    if (!state.scans.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "No cards yet.";
+      $("scans").replaceChildren(li);
+      return;
+    }
+    $("scans").replaceChildren(...state.scans.map(scan => {
+      const li = document.createElement("li");
+      li.className = scan.voided ? "voided" : "";
+      const what = document.createElement("div");
+      what.className = "what";
+      const n = document.createElement("div");
+      n.className = "n";
+      n.textContent = scan.name + (!scan.voided && scan.copy > 1 ? `  ×${scan.copy}` : "");
+      const m = document.createElement("div");
+      m.className = "m";
+      m.textContent = [scan.variant, scan.set_name, scan.number && `#${scan.number}`].filter(Boolean).join(" · ") || " ";
+      what.append(n, m);
+      const p = document.createElement("div");
+      p.className = "p";
+      p.textContent = money(scan.price, scan.currency);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = scan.voided ? "Restore" : "Remove";
+      b.onclick = () => api(`/scans/${scan.id}/${scan.voided ? "restore" : "void"}`).catch(e => say(e.message, "error"));
+      li.append(what, p, b);
+      return li;
+    }));
+  }
+
+  $("add").onsubmit = async e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target));
+    try {
+      const scan = await api("/scans", data);
+      say(`Added ${scan.name}, ${money(scan.price, scan.currency)}`, "ok");
+      for (const f of ["name", "set_name", "number", "variant", "price"]) $(f).value = "";
+      $("name").focus();
+    } catch (err) { say(err.message, "error"); }
+  };
+
+  $("undo").onclick = () => api("/undo")
+    .then(scan => say(`Removed ${scan.name}`, "ok"))
+    .catch(() => say("Nothing to undo", "error"));
+
+  // Two clicks to end a session; no browser confirm(), which can hang an OBS dock.
+  let armed = null;
+  $("new-session").onclick = async () => {
+    if (!armed) {
+      $("new-session").textContent = "Click again to confirm";
+      armed = setTimeout(() => { armed = null; $("new-session").textContent = "New session"; }, 4000);
+      return;
+    }
+    clearTimeout(armed); armed = null;
+    $("new-session").textContent = "New session";
+    try { await api("/session/new"); say("New session started", "ok"); } catch (err) { say(err.message, "error"); }
+  };
+
+  let retry = 500;
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}`);
+    ws.onopen = () => { retry = 500; $("conn").textContent = "live"; $("conn").className = ""; };
+    ws.onmessage = e => render(JSON.parse(e.data));
+    ws.onclose = () => {
+      $("conn").textContent = "reconnecting…"; $("conn").className = "down";
+      setTimeout(connect, retry); retry = Math.min(retry * 2, 8000);
+    };
+  }
+  connect();
+</script>
+</body>
+</html>
