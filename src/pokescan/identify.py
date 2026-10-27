@@ -2,16 +2,19 @@
 
 1. Read the name, HP and collector number on this Mac (`ocr`). The name goes
    on stream straight away.
-2. Match against Scrydex's cards: the stream's set if one is chosen (fetched
-   once a day, then free), plus a name search (1 credit, cached). Name and HP
+2. Match against Scrydex's cards: the sets of the packs being opened, if
+   chosen (fetched once a day, then free; a name found there needs no search),
+   else a name search (1 credit, cached). Name and HP
    find the card; comparing the scan's artwork with each candidate's reference
    image picks the exact printing (on real scans: 41-255 matching points for
    the right printing, at most 14 for any other).
 3. One clear match is added to the total: as the printing a fast vision model
    sees (`variants`, when an OpenRouter key is set), else as its standard
    printing (normal, else holo). The dock switches the variant in one click.
-   No clear match offers the top three cards. Nothing found, or Scrydex
-   unreachable, falls back to typing it in.
+   Close calls between cards of the same name (reprints told apart only by a
+   number too small to read) add the best guess, with the lookalikes kept so
+   the dock can swap it. Close calls between names offer the top three cards.
+   Nothing found, or Scrydex unreachable, falls back to typing it in.
 
 A rescan of the same card while it was never lowered (the trigger's rare
 false "different card") is dropped instead of counted twice.
@@ -24,7 +27,7 @@ import urllib.request
 from decimal import Decimal
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Collection
 
 import cv2
 import numpy as np
@@ -53,6 +56,7 @@ ART_CANDIDATES, ART_WINDOW = 5, 0.35  # compare art for up to 5 candidates withi
 CARD_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 # The printing assumed for a pulled card, so its price is on stream at once; the
 # streamer switches it in one click if it's, say, a reverse holo.
+LOOKALIKES = 6  # alternatives kept for swapping a best guess
 DEFAULT_VARIANTS = ("normal", "unlimited", "holofoil", "unlimitedHolofoil")
 SUFFIXES = {"ex", "gx", "v", "vmax", "vstar", "lv", "x", "break", "prime", "star"}
 
@@ -86,7 +90,7 @@ def digits_off(read: str, actual) -> int | None:
     return sum(a != b for a, b in zip(read.zfill(3), actual.zfill(3)))
 
 
-def score(card: dict, text: CardText, stream_set: str | None) -> float:
+def score(card: dict, text: CardText, stream_sets: Collection[str] = ()) -> float:
     s = name_similarity(text.name, card.get("name", "")) if text.name else 0.0
     if text.hp and card.get("hp"):
         s += HP_MATCH if str(text.hp) == str(card["hp"]) else HP_MISMATCH
@@ -96,14 +100,14 @@ def score(card: dict, text: CardText, stream_set: str | None) -> float:
         number_off = digits_off(text.number, card.get("number"))
         if number_off is not None and number_off <= 1:
             s += NUMBER_MATCH if number_off == 0 else NUMBER_NEAR
-    if stream_set and (card.get("expansion") or {}).get("id") == stream_set:
+    if (card.get("expansion") or {}).get("id") in stream_sets:
         s += STREAM_SET
     return s
 
 
-def rank(cards: list[dict], text: CardText, stream_set: str | None) -> list[tuple[float, dict]]:
+def rank(cards: list[dict], text: CardText, stream_sets: Collection[str] = ()) -> list[tuple[float, dict]]:
     unique = {c["id"]: c for c in cards if c.get("id")}
-    return sorted(((score(c, text, stream_set), c) for c in unique.values()), key=lambda p: -p[0])
+    return sorted(((score(c, text, stream_sets or ()), c) for c in unique.values()), key=lambda p: -p[0])
 
 
 def art_bonus(points: int) -> float:
@@ -125,6 +129,17 @@ def is_confident(ranked: list[tuple[float, dict]]) -> bool:
     return len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= MARGIN
 
 
+def lookalikes(ranked: list[tuple[float, dict]]) -> list[dict] | None:
+    """The close calls, if they're all the same card name: reprints that differ only in a number
+    too small to read. They cost much the same, so the best guess goes on stream with a price
+    and the streamer can swap it. None if the name itself is in doubt."""
+    if not ranked or ranked[0][0] < CONFIDENT:
+        return None
+    close = [c for s, c in ranked if s > ranked[0][0] - MARGIN]
+    name = (close[0].get("name") or "").casefold()
+    return close[:LOOKALIKES] if all((c.get("name") or "").casefold() == name for c in close) else None
+
+
 def download(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "pokescan"})
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -141,14 +156,14 @@ def name_queries(name: str, hp: int | None = None) -> list[str]:
 
 class Identifier:
     def __init__(self, scrydex: Scrydex, store: SessionStore, scanner: Scanner, crops_dir: Path,
-                 stream_set: Callable[[], str | None] = lambda: None, on_added=lambda scan: None,
+                 stream_sets: Callable[[], list[str]] = list, on_added=lambda scan: None,
                  read_card: Callable[[Path], CardText] = ocr.read_card, images_dir: Path | None = None,
                  fetch_image: Callable[[str], bytes] | None = None, judge=None):
         self.scrydex = scrydex
         self.store = store
         self.scanner = scanner
         self.crops_dir = crops_dir
-        self.stream_set = stream_set
+        self.stream_sets = stream_sets  # the sets of the packs being opened
         self.on_added = on_added
         self.read_card = read_card
         self.images_dir = images_dir
@@ -156,6 +171,7 @@ class Identifier:
         self.judge = judge  # pokescan.variants.VariantJudge, or None
         self._cards: dict[str, dict] = {}  # every card seen this run, for picks without another lookup
         self._last: tuple[int, str] | None = None  # (presentation, card id) of the last card added
+        self._alternatives: dict[int, list[str]] = {}  # scan id -> lookalike card ids, for best guesses
         self._tasks: set[asyncio.Task] = set()
         scanner.on_capture = self.submit
 
@@ -172,7 +188,7 @@ class Identifier:
             self.scanner.update(capture, state="unknown", message="Couldn't read the name. Type the card in.")
             return
         try:
-            ranked = rank(await self._pool(text), text, self.stream_set())
+            ranked = rank(await self._pool(text), text, self.stream_sets())
             ranked = await self._compare_art(capture, ranked)
         except ScrydexError as e:
             self.scanner.update(capture, state="unknown", message=f"{e} Type the card in.")
@@ -181,10 +197,13 @@ class Identifier:
             self.scanner.update(capture, state="unknown", message=f"No card called {text.name!r} found. Type it in.")
             return
 
+        alternatives = None
         if not is_confident(ranked):
-            self.scanner.update(capture, state="pick card", candidates=[summary(c) for _, c in ranked[:3]],
-                                message="Which one is it?")
-            return
+            if (alternatives := lookalikes(ranked)) is None:
+                self.scanner.update(capture, state="pick card", candidates=[summary(c) for _, c in ranked[:3]],
+                                    message="Which one is it?")
+                return
+            log.info("best guess for %s among %d lookalikes", text.name, len(alternatives))
         card = summary(ranked[0][1])
         if self._last == (capture.presentation, card["card_id"]):
             log.info("dropped %s: same card as the last one, never lowered", capture.crop)
@@ -193,7 +212,9 @@ class Identifier:
         # The name, set and number go on stream now; the price follows once the printing is decided.
         self.scanner.update(capture, name=card["name"], card=card)
         if chosen := await self._printing(capture, card):
-            self._add(capture, card, chosen)
+            scan = self._add(capture, card, chosen)
+            if alternatives:
+                self._alternatives[scan.id] = [c["id"] for c in alternatives]
         else:
             self.scanner.update(capture, state="unknown", name=card["name"], card=card,
                                 message="Scrydex has no near-mint price for it. Type the price in.")
@@ -236,6 +257,25 @@ class Identifier:
             raise ValueError("no near-mint price for that variant")
         return self.store.update_variant(scan_id, chosen["label"], Decimal(chosen["price"]), chosen["currency"] or "USD")
 
+    def alternatives_for(self, scan_id: int | None) -> list[dict] | None:
+        """The lookalikes a best-guess scan could really be, itself included."""
+        ids = self._alternatives.get(scan_id)
+        return [summary(self._cards[i]) for i in ids if i in self._cards] if ids else None
+
+    async def change_card(self, scan_id: int, card_id: str) -> Scan:
+        """Swap a best guess for the lookalike it really is, keeping the printing where it has one."""
+        scan = self.store.get(scan_id)
+        if scan is None or card_id not in self._alternatives.get(scan_id, ()):
+            raise LookupError("no such best guess")
+        card = await self._summary(card_id)
+        chosen = next((v for v in card["variants"] if v["label"] == scan.variant and v["price"] is not None),
+                      None) or default_variant(card["variants"])
+        if chosen is None:
+            raise ValueError("no near-mint price for that card")
+        return self.store.update_card(scan_id, name=card["name"], set_name=card["set_name"], number=card["number"],
+                                      card_id=card["card_id"], variant=chosen["label"],
+                                      price=Decimal(chosen["price"]), currency=chosen["currency"] or "USD")
+
     async def _summary(self, card_id: str) -> dict:
         raw = self._cards.get(card_id) or self._remember([await self.scrydex.card(card_id)])[0]
         return summary(raw)
@@ -245,22 +285,22 @@ class Identifier:
         return next((v for v in card["variants"] if v["name"] == name and v["price"] is not None), None)
 
     async def search(self, text: str) -> list[dict]:
-        """Cards for a name typed into the dock, best first (the stream's set ranked up)."""
+        """Cards for a name typed into the dock, best first (the packs' sets ranked up)."""
         if not text.strip():
             return []
         cards = []
         for query in name_queries(text):
             if cards := await self.scrydex.search(query):
                 break
-        ranked = rank(self._remember(cards), CardText(text, None, None, None), self.stream_set())
+        ranked = rank(self._remember(cards), CardText(text, None, None, None), self.stream_sets())
         return [summary(c) for _, c in ranked[:8]]
 
     async def _pool(self, text: CardText) -> list[dict]:
-        cards = []
-        if set_id := self.stream_set():
+        cards, sets = [], self.stream_sets()
+        for set_id in sets:
             cards += await self.scrydex.expansion_cards(set_id)
-            if is_confident(rank(cards, text, set_id)):
-                return self._remember(cards)  # matched within the set: no search needed
+        if (ranked := rank(cards, text, sets)) and ranked[0][0] >= CONFIDENT:
+            return self._remember(cards)  # it's in the packs being opened: no search needed
         for query in name_queries(text.name, text.hp) + (name_queries(text.name) if text.hp else []):
             found = await self.scrydex.search(query)
             cards += found

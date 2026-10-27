@@ -77,8 +77,11 @@
   .variants button.best { border-color: var(--accent); }
   .msg { font-size: 12px; color: var(--muted); }
   .find { display: flex; gap: 6px; margin-top: 6px; }
-  #set-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; }
-  #set-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #set-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 4px 2px 9px;
+          border-radius: 999px; background: rgba(255, 203, 61, 0.16); color: var(--accent); }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip button { padding: 0 6px; font-size: 12px; line-height: 18px; border-radius: 999px; }
   #set-results button { display: block; width: 100%; text-align: left; margin-top: 4px; font-weight: 500; }
   [hidden] { display: none !important; }
 </style>
@@ -92,6 +95,10 @@
     <div id="last-card" hidden>
       <div class="msg" style="margin-top:10px">Last card: <span id="last-name"></span> · printing:</div>
       <div class="variants" id="last-variants"></div>
+      <div id="last-others" hidden>
+        <div class="msg" style="margin-top:8px">Best guess from lookalikes. Or is it:</div>
+        <div class="variants" id="last-alternatives"></div>
+      </div>
     </div>
     <div class="actions"><button id="undo" title="Remove the last card from the total">Undo last</button></div>
   </section>
@@ -100,8 +107,8 @@
     <div class="head"><h2>Scanner</h2><span class="pill" id="scan-status">starting…</span></div>
     <div class="problem" id="scan-problem" hidden></div>
     <div id="set-box" hidden>
-      <div id="set-row"><span class="msg">Set:</span><span class="name" id="set-name">any</span>
-        <button type="button" id="set-change">Choose</button><button type="button" id="set-clear" hidden>Clear</button></div>
+      <div id="set-row"><span class="msg">Packs I'm opening:</span><span id="set-chips"></span>
+        <button type="button" id="set-change">Add set</button></div>
       <div class="find" id="set-find" hidden><input id="set-q" placeholder="Set name, e.g. Surging Sparks"><button type="button" id="set-go">Find</button></div>
       <div id="set-results"></div>
     </div>
@@ -307,8 +314,7 @@
     $("scan-problem").hidden = !scanner.problem;
     $("scan-problem").textContent = scanner.problem || "";
     $("set-box").hidden = !state.identify;
-    $("set-name").textContent = state.stream_set ? state.stream_set.name : "any";
-    $("set-clear").hidden = !state.stream_set;
+    renderSets(state.stream_sets || []);
     // Status changes several times a second; only rebuild the list when the scans change,
     // so typing in a search box isn't interrupted.
     const key = JSON.stringify([scanner.captures, state.identify]);
@@ -329,15 +335,29 @@
     return res.json();
   }
 
+  // The sets of the packs being opened: cards are matched there first, and ranked above reprints.
+  let streamSets = [];
+  const saveSets = sets => api("/settings/sets", { sets }).catch(e => say(e.message, "error"));
+  function renderSets(sets) {
+    const key = JSON.stringify(sets);
+    if (key === JSON.stringify(streamSets) && $("set-chips").childNodes.length) return;
+    streamSets = sets;
+    $("set-chips").replaceChildren(...(sets.length ? sets.map(x => {
+      const chip = el("span", "chip"), name = el("span", "", x.name), remove = el("button", "", "×");
+      remove.type = "button";
+      remove.title = `Stop matching ${x.name}`;
+      remove.onclick = () => saveSets(streamSets.filter(y => y.id !== x.id));
+      chip.append(name, remove);
+      return chip;
+    }) : [el("span", "msg", "any set")]));
+  }
   $("set-change").onclick = () => { $("set-find").hidden = false; $("set-q").focus(); };
-  $("set-clear").onclick = () => api("/settings/set", {}).catch(e => say(e.message, "error"));
   const findSets = () => api_get(`/sets?q=${encodeURIComponent($("set-q").value)}`)
     .then(sets => $("set-results").replaceChildren(...sets.map(x => {
       const b = el("button", "", `${x.name}${x.release_date ? ` (${x.release_date.slice(0, 4)})` : ""}`);
       b.type = "button";
-      b.onclick = () => api("/settings/set", { id: x.id, name: x.name })
-        .then(() => { $("set-results").replaceChildren(); $("set-find").hidden = true; $("set-q").value = ""; })
-        .catch(e => say(e.message, "error"));
+      b.onclick = () => saveSets([...streamSets.filter(y => y.id !== x.id), { id: x.id, name: x.name }])
+        .then(() => { $("set-results").replaceChildren(); $("set-find").hidden = true; $("set-q").value = ""; });
       return b;
     })))
     .catch(e => say(e.message, "error"));
@@ -346,10 +366,22 @@
 
   // Switch the last card's printing in one click; the price on stream and the total follow.
   function renderLastCard(state) {
-    const last = state.last, options = state.last_variants;
-    $("last-card").hidden = !(last && options && options.length > 1);
+    const last = state.last, options = state.last_variants || [], others = state.last_alternatives || [];
+    $("last-card").hidden = !(last && (options.length > 1 || others.length > 1));
     if ($("last-card").hidden) return;
-    $("last-name").textContent = last.name;
+    $("last-name").textContent = `${last.name}${last.set_name ? ` · ${last.set_name}` : ""}${last.number ? ` ${last.number}` : ""}`;
+    // A best guess among same-named reprints: one click makes it the right one, price and all.
+    $("last-others").hidden = others.length < 2;
+    $("last-alternatives").replaceChildren(...others.map(c => {
+      const mine = c.card_id === last.card_id;
+      const b = el("button", mine ? "best" : "", `${c.set_name || "?"} ${c.number || ""}`);
+      b.type = "button";
+      b.disabled = mine;
+      b.onclick = () => api(`/scans/${last.id}/card`, { card_id: c.card_id })
+        .then(scan => say(`Now ${scan.name}, ${scan.set_name} ${scan.number}: ${money(scan.price, scan.currency)}`, "ok"))
+        .catch(e => say(e.message, "error"));
+      return b;
+    }));
     $("last-variants").replaceChildren(...options.map(v => {
       const b = el("button", v.label === last.variant ? "best" : "", `${v.label} ${money(v.price, v.currency)}`);
       b.type = "button";

@@ -196,6 +196,18 @@ class SessionStore:
             ).rowcount
         return self.get(scan_id) if changed else None
 
+    def update_card(self, scan_id: int, name: str, set_name: str | None, number: str | None, card_id: str,
+                    variant: str, price: Decimal, currency: str) -> Scan | None:
+        """Correct which card a scan is, e.g. a reprint of the same name from another set."""
+        with self.db:
+            changed = self.db.execute(
+                "UPDATE scans SET name = ?, set_name = ?, number = ?, card_id = ?, variant = ?, price_minor = ?,"
+                " currency = ? WHERE id = ? AND session_id = ?",
+                (clean(name), clean(set_name), clean(number), card_id, variant, to_minor(price, currency), currency,
+                 scan_id, self.session_id),
+            ).rowcount
+        return self.get(scan_id) if changed else None
+
     def void(self, scan_id: int) -> Scan | None:
         return self._set_voided(scan_id, self.clock())
 

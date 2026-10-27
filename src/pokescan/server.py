@@ -28,6 +28,7 @@ CROPS = web.AppKey("crops", object)  # Path of the crops directory, or None
 IDENTIFIER = web.AppKey("identifier", object)  # pokescan.identify.Identifier, or None without Scrydex
 SETTINGS = web.AppKey("settings", object)  # Settings
 
+MAX_SETS = 6  # sets of packs being opened at once
 CROP_NAME = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]{4}\.jpg$")
 
 PAGES = files("pokescan") / "web"
@@ -45,6 +46,13 @@ class Settings:
 
     def get(self, key: str, default=None):
         return self.values.get(key, default)
+
+    def stream_sets(self) -> list[dict]:
+        """The sets of the packs being opened, as [{id, name}]; an older single choice counts as one."""
+        sets = self.get("stream_sets")
+        if sets is None and (single := self.get("stream_set")):
+            sets = [single]
+        return sets or []
 
     def set(self, key: str, value) -> None:
         self.values[key] = value
@@ -79,9 +87,10 @@ def full_state(app: web.Application) -> dict:
     state = app[STORE].state()
     state["scanner"] = app[SCANNER].snapshot() if app[SCANNER] else None
     state["identify"] = app[IDENTIFIER] is not None
-    state["stream_set"] = app[SETTINGS].get("stream_set")
-    last = state["last"]
-    state["last_variants"] = app[IDENTIFIER].variants_for(last["card_id"]) if app[IDENTIFIER] and last else None
+    state["stream_sets"] = app[SETTINGS].stream_sets()
+    last, ident = state["last"], app[IDENTIFIER]
+    state["last_variants"] = ident.variants_for(last["card_id"]) if ident and last else None
+    state["last_alternatives"] = ident.alternatives_for(last["id"]) if ident and last else None
     return state
 
 
@@ -201,12 +210,16 @@ async def search_sets(request: web.Request) -> web.Response:
     return web.json_response(found)
 
 
-async def choose_set(request: web.Request) -> web.Response:
-    body = await request.json()
-    chosen = {"id": str(body["id"]), "name": str(body.get("name") or body["id"])} if body.get("id") else None
-    request.app[SETTINGS].set("stream_set", chosen)
+async def choose_sets(request: web.Request) -> web.Response:
+    """Replace the sets of the packs being opened: {sets: [{id, name}]}."""
+    try:
+        body = await request.json()
+        chosen = [{"id": str(x["id"]), "name": str(x.get("name") or x["id"])} for x in body["sets"]][:MAX_SETS]
+    except (ValueError, KeyError, TypeError) as e:
+        raise web.HTTPBadRequest(text="expected {sets: [{id, name}]}") from e
+    request.app[SETTINGS].set("stream_sets", list({x["id"]: x for x in chosen}.values()))
     await broadcast(request.app)
-    return web.json_response(chosen)
+    return web.json_response(request.app[SETTINGS].stream_sets())
 
 
 async def search_cards(request: web.Request) -> web.Response:
@@ -225,6 +238,18 @@ async def choose_card(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text=str(e) or "expected {card_id, variant}")
     await broadcast(request.app)
     return web.json_response(scan.to_json(), status=201)
+
+
+async def change_card(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        scan = await scrydex_call(identifier(request).change_card(int(request.match_info["scan_id"]), str(body["card_id"])))
+    except LookupError as e:
+        raise web.HTTPNotFound(text=str(e))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise web.HTTPBadRequest(text=str(e) or "expected {card_id}")
+    await broadcast(request.app)
+    return web.json_response(scan.to_json())
 
 
 async def change_variant(request: web.Request) -> web.Response:
@@ -296,6 +321,7 @@ def make_app(store: SessionStore, token: str, scanner=None, crops_dir: Path | No
     app.router.add_post(r"/captures/{capture_id:\d+}/choose", choose_card)
     app.router.add_post(r"/scans/{scan_id:\d+}/variant", change_variant)
     app.router.add_get("/sets", search_sets)
-    app.router.add_post("/settings/set", choose_set)
+    app.router.add_post(r"/scans/{scan_id:\d+}/card", change_card)
+    app.router.add_post("/settings/sets", choose_sets)
     app.router.add_get("/cards", search_cards)
     return app

@@ -92,7 +92,7 @@ def test_stream_set_breaks_ties():
     text = CardText("Mankey", 50, None, None)
     cards = [card("old", "Mankey", set_id="old", hp="50"), card("new", "Mankey", set_id="me5", hp="50")]
     assert not is_confident(rank(cards, text, None))
-    ranked = rank(cards, text, "me5")
+    ranked = rank(cards, text, ["me5"])
     assert ranked[0][1]["id"] == "new" and is_confident(ranked)
 
 
@@ -160,7 +160,7 @@ def make(env, cards, text, capture=None, stream_set=None, fail=False):
     capture = capture or Capture(1, "2026-10-27T19:00:00+00:00", "20261027-190000-0001.jpg", 0.96, 0.75,
                                  presentation=1, state="identifying")
     scanner = FakeScanner(capture)
-    ident = Identifier(FakeScrydex(cards, fail), store, scanner, crops, lambda: stream_set,
+    ident = Identifier(FakeScrydex(cards, fail), store, scanner, crops, lambda: [stream_set] if stream_set else [],
                        read_card=lambda path: text)
     return ident, scanner, capture, store
 
@@ -193,11 +193,41 @@ async def test_holo_only_card_defaults_to_holo(env):
     assert store.state()["last"]["variant"] == "Holo"
 
 
-async def test_ambiguous_name_offers_candidates(env):
-    cards = [card("a", "Mankey", set_id="a", hp="50"), card("b", "Mankey", set_id="b", hp="50")]
-    ident, scanner, capture, store = make(env, cards, CardText("Mankey", 50, None, None))
+async def test_lookalike_reprints_add_a_best_guess_that_can_be_swapped(env):
+    # Same name, same art, a number too small to read: price the best guess now, swap it in one click.
+    cards = [card("a", "Black Belt's Training", set_id="a", set_name="Set A", hp=None, number="145", total=159,
+                  variants={"normal": 0.18, "reverseHolofoil": 0.34}),
+             card("b", "Black Belt's Training", set_id="b", set_name="Set B", hp=None, number="98", total=131,
+                  variants={"normal": 0.08, "reverseHolofoil": 0.13})]
+    ident, scanner, capture, store = make(env, cards, CardText("Black Belt's Training", None, None, None))
+    await ident.identify(capture)
+    last = store.state()["last"]
+    assert last["price"] == "0.18" and scanner.taken == [capture.crop]
+    assert {c["card_id"] for c in ident.alternatives_for(last["id"])} == {"a", "b"}
+    await ident.change_variant(last["id"], "reverseHolofoil")
+    scan = await ident.change_card(last["id"], "b")
+    assert (scan.card_id, scan.set_name, scan.number, scan.variant, scan.price) == \
+        ("b", "Set B", "098/131", "Reverse Holo", Decimal("0.13"))  # the printing carries over
+    assert store.totals() == {"USD": Decimal("0.13")} and store.state()["count"] == 1
+    with pytest.raises(LookupError):
+        await ident.change_card(last["id"], "not-a-lookalike")
+
+
+async def test_packs_being_opened_beat_reprints_elsewhere(env):
+    cards = [card("a", "Black Belt's Training", set_id="sv9", hp=None), card("b", "Black Belt's Training", set_id="sv8pt5", hp=None)]
+    ident, scanner, capture, store = make(env, cards, CardText("Black Belt's Training", None, None, None),
+                                          stream_set="sv8pt5")
+    await ident.identify(capture)
+    assert store.state()["last"]["card_id"] == "b" and ident.scrydex.queries == []
+    assert ident.alternatives_for(store.state()["last"]["id"]) is None  # a clear match, not a guess
+
+
+async def test_unsure_name_offers_candidates(env):
+    cards = [card("a", "Cornerstone Mask Ogerpon ex", hp="210"), card("b", "Wellspring Mask Ogerpon ex", hp="210")]
+    ident, scanner, capture, store = make(env, cards, CardText("merton tal Ogerpon eX", 210, None, None))
     await ident.identify(capture)
     assert capture.state == "pick card" and {c["card_id"] for c in capture.candidates} == {"a", "b"}
+    assert store.state()["count"] == 0
 
 
 async def test_unreadable_or_unreachable_falls_back_to_typing(env):

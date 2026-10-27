@@ -153,3 +153,29 @@ async def test_dismiss_capture(scanning_client, client):
     assert (await sc.post("/captures/1/dismiss", headers=AUTH)).status == 200
     assert (await sc.post("/captures/9/dismiss", headers=AUTH)).status == 404
     assert (await client.post("/captures/1/dismiss", headers=AUTH)).status == 404  # scanning off
+
+
+async def test_packs_being_opened_are_kept_and_an_old_single_set_still_counts(tmp_path):
+    import json
+
+    from pokescan.server import Settings
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"stream_set": {"id": "sv8pt5", "name": "Prismatic Evolutions"}}))
+    store = SessionStore(tmp_path / "pokescan.db")
+    client = TestClient(TestServer(make_app(store, TOKEN, settings=Settings(path))))
+    await client.start_server()
+    try:
+        state = await (await client.get("/state", headers=AUTH)).json()
+        assert [x["id"] for x in state["stream_sets"]] == ["sv8pt5"]
+        sets = [{"id": "sv8pt5", "name": "Prismatic Evolutions"}, {"id": "me5", "name": "Pitch Black"},
+                {"id": "me5", "name": "Pitch Black"}]
+        resp = await client.post("/settings/sets", json={"sets": sets}, headers=AUTH)
+        assert [x["id"] for x in await resp.json()] == ["sv8pt5", "me5"]  # duplicates dropped
+        assert [x["id"] for x in Settings(path).stream_sets()] == ["sv8pt5", "me5"]  # outlives a restart
+        assert (await client.post("/settings/sets", json={"sets": "me5"}, headers=AUTH)).status == 400
+        assert (await client.post("/settings/sets", json={"sets": []}, headers=AUTH)).status == 200
+        assert Settings(path).stream_sets() == []
+    finally:
+        await client.close()
+        store.close()

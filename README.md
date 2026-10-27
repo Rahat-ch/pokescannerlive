@@ -23,6 +23,8 @@ From the dock you can add a card with its price, undo the last one, remove or re
 
 Repeats count: a second copy of a card is added to the total and marked ×2 on stream.
 
+**Before going live, add the packs you're opening** under *Packs I'm opening* in the dock (e.g. Prismatic Evolutions). Scanned cards are matched within those sets first, which tells same-named reprints apart and costs no lookups once the sets are fetched for the day. When the scanner still can't tell lookalikes apart, it prices its best guess and the dock offers the others under **Last card**, one click to swap.
+
 ## Data
 
 Everything lives in `~/.pokescan/` (change with `--data-dir`): the session database `pokescan.db` and the URL token. The server only listens on 127.0.0.1.

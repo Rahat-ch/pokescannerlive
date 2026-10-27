@@ -151,10 +151,10 @@ def cmd_serve(args) -> int:
 
             from pokescan.variants import VariantJudge
 
-            stream_set = lambda: (settings.get("stream_set") or {}).get("id")
+            stream_sets = lambda: [x["id"] for x in settings.stream_sets()]
             judge = VariantJudge.from_env()
             identifier = Identifier(Scrydex(*keys, cache=Cache(args.data_dir / "scrydex-cache.db")),
-                                    store, scanner, crops_dir, stream_set, images_dir=args.data_dir / "card-images",
+                                    store, scanner, crops_dir, stream_sets, images_dir=args.data_dir / "card-images",
                                     judge=judge)
             print("identifying scanned cards (read on this Mac) and pricing them with Scrydex")
             print("telling holo from normal with Claude Haiku via OpenRouter" if judge else
