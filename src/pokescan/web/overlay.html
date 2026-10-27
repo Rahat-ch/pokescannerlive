@@ -76,15 +76,19 @@
   .badge.repeat { color: var(--brand); border-color: var(--brand); }
   /* Lower thirds: a message now and then, bottom right, clear of the pull card. */
   #lower {
-    right: 40px; bottom: 48px; min-width: 520px; max-width: 780px; padding: 20px 28px 22px; overflow: hidden;
+    right: 40px; bottom: 48px; min-width: 640px; max-width: 1100px; padding: 28px 38px 32px; overflow: hidden;
+    background: rgba(11, 11, 11, 0.96);
     opacity: 0; transform: translateX(40px); transition: opacity 320ms ease, transform 320ms ease;
   }
   #lower.show { opacity: 1; transform: translateX(0); }
-  #lower .title { margin-top: 12px; font-size: 34px; font-weight: 700; line-height: 1.12; letter-spacing: -0.02em; }
+  #lower .label { font-size: 20px; color: #c4c4c4; }
+  #lower .label::before { width: 12px; height: 12px; }
+  #lower .title { margin-top: 16px; font-size: 48px; font-weight: 800; line-height: 1.1; letter-spacing: -0.025em;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5); }
   #lower .title::after { content: "."; color: var(--brand); }
   #lower .title.ends::after { content: none; }  /* already ends in "?" or "!" */
-  #lower .detail { margin-top: 10px; font: 500 21px/1.3 var(--mono); color: var(--brand); }
-  #lower .timer { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--brand);
+  #lower .detail { margin-top: 14px; font: 600 28px/1.3 var(--mono); color: var(--brand); }
+  #lower .timer { position: absolute; left: 0; bottom: 0; height: 4px; width: 100%; background: var(--brand);
     transform-origin: left; transform: scaleX(0); }
   #lower.show .timer { animation: drain var(--show-for, 12s) linear forwards; }
   @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
@@ -140,6 +144,7 @@
 
   const totalEl = document.getElementById("total");
   const pullEl = document.getElementById("pull");
+  const lowerEl = document.getElementById("lower");
   // What the pop-up shows: a priced card {kind: "scan", id}, or a card the scanner
   // just caught and nobody has priced yet {kind: "capture", crop}.
   let shown = null;
@@ -181,6 +186,7 @@
   }
 
   function popUp(what, holdFor) {
+    lowerEl.classList.remove("show");  // a pull takes the screen; the message has had its moment
     pullEl.classList.add("show");
     shown = what;
     clearTimeout(hideTimer);
@@ -329,7 +335,6 @@
     { label: "Open source", title: "The card scanner is open source", detail: "github.com/Rahat-ch/pokescannerlive" },
     { label: "Work with me", title: "Want custom integrations for your stream?", detail: "Reach out · rahatcodes.com" },
   ];
-  const lowerEl = document.getElementById("lower");
   const LOWER_EVERY_MS = Number(params.get("every") || 4) * 60000, LOWER_SHOW_MS = 12000, FIRST_LOWER_MS = 60000;
   let lowerNext = 0;
   function showLower() {
