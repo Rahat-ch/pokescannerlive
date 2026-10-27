@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <title>pokescan overlay</title>
 <style>
-  /* OBS Browser Source: add at 1920×1080. The page is transparent outside the panels. */
+  /* OBS Browser Source at the canvas size. Laid out at 1920×1080 and zoomed to fit,
+     so 1440p and 4K canvases stay sharp. Transparent outside the panels. */
   :root {
     --panel: rgba(16, 18, 28, 0.86);
     --edge: rgba(255, 255, 255, 0.10);
@@ -15,7 +16,7 @@
   }
   html, body { margin: 0; background: transparent; overflow: hidden; }
   body {
-    width: 100vw; height: 100vh; color: var(--text);
+    position: relative; width: 1920px; height: 1080px; color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
@@ -69,6 +70,10 @@
   const params = new URLSearchParams(location.search);
   const token = params.get("token") || "";
   const holdMs = Number(params.get("hold") || 8) * 1000;
+
+  const fit = () => { document.documentElement.style.zoom = String(innerWidth / 1920); };
+  addEventListener("resize", fit);
+  fit();
 
   const money = (amount, currency) => {
     try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(amount)); }

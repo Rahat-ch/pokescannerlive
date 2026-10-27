@@ -14,7 +14,7 @@ It prints two URLs. Both carry a token that stays the same between runs, so you 
 
 ## Set up OBS
 
-1. **Overlay (what viewers see).** In your scene, add **Source → Browser** and paste the `overlay` URL. Set width 1920 and height 1080, and put it above your camera. It is transparent apart from the total (top right) and the pulled-card pop-up (bottom left).
+1. **Overlay (what viewers see).** In your scene, add **Source → Browser** and paste the `overlay` URL. Set its width and height to your canvas size (Settings → Video → Base Canvas, e.g. 1920×1080 or 2560×1440); the overlay scales to fit. Put it above your camera. It is transparent apart from the total (top right) and the pulled-card pop-up (bottom left).
 2. **Control dock (only you see it).** **Docks → Custom Browser Docks**, name it `pokescan`, paste the `control` URL.
 
 From the dock you can add a card with its price, undo the last one, remove or restore any card, export the session as CSV, and start a new session. The session is saved as you go, so it survives a crash or restart until you press **New session**.
