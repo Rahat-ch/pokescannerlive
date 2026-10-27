@@ -1,0 +1,1 @@
+We want to create some sort of plugin or extension for OBS that allows us to have a program where, while I'm streaming, I can display Pokémon cards that I'm pulling out of a deck. Then the scanner will automatically show on screen how much it's worth and will keep track in that session of the total cost of all the cards that we have now. 

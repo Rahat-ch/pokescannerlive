@@ -1,0 +1,28 @@
+[project]
+name = "pokescan"
+version = "0.1.0"
+description = "Identify Pokémon cards held up on an OBS stream, price them, and keep a session total."
+requires-python = ">=3.12"
+dependencies = [
+    "simpleobsws>=1.4.3",
+]
+
+[project.scripts]
+pokescan = "pokescan.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pokescan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
