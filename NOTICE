@@ -1,0 +1,14 @@
+pokescan includes or downloads third-party work:
+
+cardstream (https://github.com/Ximilar-com/cardstream)
+  Copyright 2026 Ximilar s.r.o. Licensed under the Apache License, Version 2.0.
+  - The card segmentation model (RF-DETR Seg Nano, finetuned by Ximilar;
+    weights Apache-2.0) is downloaded at first run from the cardstream v2.0.0
+    release. It is not redistributed in this repository.
+  - `sharpness` in src/pokescan/detect.py is adapted from cardstream's
+    core/sharpness.py (re-blur ratio, after Crete et al., 2007).
+  - The trigger's design in src/pokescan/trigger.py follows cardstream's
+    core/engine.py DecisionCore; the code is a new implementation.
+
+RF-DETR (https://github.com/roboflow/rf-detr)
+  Roboflow. Licensed under the Apache License, Version 2.0.

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from aiohttp import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -85,3 +87,69 @@ def test_token_is_created_once_and_kept(tmp_path):
     assert len(token) >= 16
     assert load_token(tmp_path) == token
     assert (tmp_path / "token").stat().st_mode & 0o077 == 0
+
+
+class FakeScanner:
+    def __init__(self):
+        self.taken, self.dismissed = [], []
+        self.on_change = lambda: None
+
+    def snapshot(self):
+        return {"source": "Camera", "connected": True, "problem": None, "status": "no card", "captures": []}
+
+    def take(self, crop):
+        self.taken.append(crop)
+
+    def dismiss(self, capture_id):
+        self.dismissed.append(capture_id)
+        return capture_id == 1
+
+    async def run(self):
+        await asyncio.Event().wait()
+
+
+@pytest.fixture
+async def scanning_client(tmp_path):
+    store = SessionStore(tmp_path / "pokescan.db")
+    crops = tmp_path / "crops"
+    crops.mkdir()
+    (crops / "20261027-190000-0001.jpg").write_bytes(b"\xff\xd8 jpeg")
+    (tmp_path / "secret.txt").write_text("not for you")
+    scanner = FakeScanner()
+    client = TestClient(TestServer(make_app(store, TOKEN, scanner, crops)))
+    await client.start_server()
+    yield client, scanner
+    await client.close()
+    store.close()
+
+
+async def test_state_includes_scanner_only_when_scanning(client, scanning_client):
+    assert (await (await client.get("/state", headers=AUTH)).json())["scanner"] is None
+    sc, _ = scanning_client
+    assert (await (await sc.get("/state", headers=AUTH)).json())["scanner"]["source"] == "Camera"
+
+
+async def test_crops_are_served_by_exact_name_only(scanning_client):
+    sc, _ = scanning_client
+    ok = await sc.get(f"/crops/20261027-190000-0001.jpg?token={TOKEN}")
+    assert ok.status == 200 and await ok.read() == b"\xff\xd8 jpeg"
+    assert (await sc.get("/crops/20261027-190000-0001.jpg")).status == 403
+    for name in ["..%2Fsecret.txt", "secret.txt", "20261027-190000-0002.jpg"]:
+        assert (await sc.get(f"/crops/{name}?token={TOKEN}")).status == 404
+
+
+async def test_adding_a_scanned_card_attaches_its_crop(scanning_client):
+    sc, scanner = scanning_client
+    resp = await sc.post("/scans", json={"name": "Glaceon", "price": "0.50", "crop": "20261027-190000-0001.jpg"},
+                         headers=AUTH)
+    assert resp.status == 201 and (await resp.json())["crop"] == "20261027-190000-0001.jpg"
+    assert scanner.taken == ["20261027-190000-0001.jpg"]
+    bad = await sc.post("/scans", json={"name": "Glaceon", "price": "1", "crop": "../../etc/passwd"}, headers=AUTH)
+    assert bad.status == 400
+
+
+async def test_dismiss_capture(scanning_client, client):
+    sc, scanner = scanning_client
+    assert (await sc.post("/captures/1/dismiss", headers=AUTH)).status == 200
+    assert (await sc.post("/captures/9/dismiss", headers=AUTH)).status == 404
+    assert (await client.post("/captures/1/dismiss", headers=AUTH)).status == 404  # scanning off

@@ -31,14 +31,18 @@ CREATE TABLE IF NOT EXISTS scans (
     currency TEXT NOT NULL,
     source TEXT NOT NULL,          -- 'manual' until identification lands
     card_id TEXT,                  -- catalog id, once cards are identified
-    voided_at TEXT
+    voided_at TEXT,
+    crop TEXT                      -- scanner crop file, if the card was scanned
 );
 """
+
+# Columns added after the first release, for databases created before them.
+MIGRATIONS = {"crop": "ALTER TABLE scans ADD COLUMN crop TEXT"}
 
 # Currencies with no minor unit; everything else is in hundredths.
 ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW"}
 
-CSV_FIELDS = ["added_at", "name", "set_name", "number", "variant", "price", "currency", "copy", "status", "source", "card_id"]
+CSV_FIELDS = ["added_at", "name", "set_name", "number", "variant", "price", "currency", "copy", "status", "source", "card_id", "crop"]
 
 
 def minor_digits(currency: str) -> int:
@@ -86,6 +90,7 @@ class Scan:
     source: str
     card_id: str | None
     voided_at: str | None
+    crop: str | None = None
     copy: int = 1  # 1 for the first counted copy of this card this session, 2 for the next...
 
     @property
@@ -113,6 +118,10 @@ class SessionStore:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(scans)")}
+        for column, statement in MIGRATIONS.items():
+            if column not in columns:
+                self.db.execute(statement)
         self.session_id = self._open_session()
 
     def close(self) -> None:
@@ -137,7 +146,7 @@ class SessionStore:
 
     def add(self, name: str, price: str | Decimal, currency: str = "USD", set_name: str | None = None,
             number: str | None = None, variant: str | None = None, source: str = "manual",
-            card_id: str | None = None) -> Scan:
+            card_id: str | None = None, crop: str | None = None) -> Scan:
         name = name.strip()
         if not name:
             raise ValueError("a card needs a name")
@@ -147,10 +156,10 @@ class SessionStore:
         price_minor = to_minor(price, currency)
         with self.db:
             scan_id = self.db.execute(
-                "INSERT INTO scans (session_id, added_at, name, set_name, number, variant, price_minor, currency, source, card_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO scans (session_id, added_at, name, set_name, number, variant, price_minor, currency,"
+                " source, card_id, crop) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.session_id, self.clock(), name, clean(set_name), clean(number), clean(variant),
-                 price_minor, currency, source, clean(card_id)),
+                 price_minor, currency, source, clean(card_id), clean(crop)),
             ).lastrowid
         return self.get(scan_id)
 
@@ -219,5 +228,5 @@ class SessionStore:
                 "number": scan.number or "", "variant": scan.variant or "", "price": str(scan.price),
                 "currency": scan.currency, "copy": scan.copy if scan.voided_at is None else "",
                 "status": "voided" if scan.voided_at else "counted", "source": scan.source,
-                "card_id": scan.card_id or "",
+                "card_id": scan.card_id or "", "crop": scan.crop or "",
             })

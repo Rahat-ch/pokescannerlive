@@ -5,6 +5,9 @@ description = "Identify Pokémon cards held up on an OBS stream, price them, and
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.14.5",
+    "numpy>=2.5",
+    "onnxruntime==1.31.0",
+    "opencv-python-headless>=5.0.0.93",
     "simpleobsws>=1.4.3",
 ]
 

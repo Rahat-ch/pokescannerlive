@@ -136,3 +136,26 @@ def test_csv_export_lists_every_scan_oldest_first(store):
         ("Pikachu", "1", "counted"), ("Pikachu", "2", "counted"), ("Mew", "", "voided"),
     ]
     assert rows[0]["price"] == "0.35" and rows[0]["number"] == "025/165"
+
+
+def test_scans_keep_their_crop_and_old_databases_are_migrated(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT);
+        CREATE TABLE scans (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, added_at TEXT NOT NULL,
+            name TEXT NOT NULL, set_name TEXT, number TEXT, variant TEXT, price_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL, source TEXT NOT NULL, card_id TEXT, voided_at TEXT);
+        INSERT INTO sessions (started_at) VALUES ('2026-10-27T18:00:00+00:00');
+        INSERT INTO scans (session_id, added_at, name, price_minor, currency, source)
+            VALUES (1, '2026-10-27T18:01:00+00:00', 'Old card', 100, 'USD', 'manual');
+    """)
+    old.commit()
+    old.close()
+    store = SessionStore(path)
+    assert store.scans()[0].crop is None
+    scan = store.add("Glaceon", "0.50", crop="20261027-190000-0001.jpg")
+    assert scan.crop == "20261027-190000-0001.jpg"
+    assert store.state()["last"]["crop"] == "20261027-190000-0001.jpg"
+    store.close()

@@ -57,6 +57,17 @@
   .url { display: flex; gap: 6px; margin-top: 4px; }
   .url input { font-size: 12px; color: var(--muted); }
   a.button { display: inline-block; text-align: center; text-decoration: none; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: #343845; color: var(--muted); }
+  .pill.held, .pill.focus { background: rgba(255, 203, 61, 0.16); color: var(--accent); }
+  .pill.scanned { background: rgba(95, 211, 141, 0.16); color: var(--ok); }
+  .pill.down { background: rgba(255, 107, 107, 0.16); color: var(--danger); }
+  .problem { font-size: 12px; color: var(--danger); margin-top: 6px; }
+  .thumb { width: 54px; height: 75px; object-fit: cover; border-radius: 4px; background: var(--field); flex: none; }
+  li .thumb.small { width: 28px; height: 39px; }
+  #attached { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  #attached .thumb { width: 72px; height: 100px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -68,9 +79,20 @@
     <div class="actions"><button id="undo" title="Remove the last card from the total">Undo last</button></div>
   </section>
 
+  <section id="scanner" hidden>
+    <div class="head"><h2>Scanner</h2><span class="pill" id="scan-status">starting…</span></div>
+    <div class="problem" id="scan-problem" hidden></div>
+    <ul id="captures"></ul>
+  </section>
+
   <section>
     <h2>Add a card</h2>
     <form id="add" autocomplete="off">
+      <input type="hidden" id="crop" name="crop">
+      <div id="attached" hidden>
+        <img class="thumb" id="attached-img" alt="Scanned card">
+        <div><div class="m">From the scanner</div><button type="button" id="detach">Remove image</button></div>
+      </div>
       <label for="name">Card name</label>
       <input id="name" name="name" required placeholder="Charizard ex">
       <div class="grid">
@@ -140,7 +162,64 @@
     return res.json();
   }
 
+  const cropUrl = name => `/crops/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
+  const thumb = (name, cls = "thumb") => {
+    const img = document.createElement("img");
+    img.className = cls; img.src = cropUrl(name); img.alt = "Scanned card"; img.loading = "lazy";
+    return img;
+  };
+
+  function attach(name) {
+    $("crop").value = name || "";
+    $("attached").hidden = !name;
+    if (name) $("attached-img").src = cropUrl(name);
+  }
+  $("detach").onclick = () => attach(null);
+
+  const STATUS_CLASS = { "card held": "held", "waiting for focus": "focus", "scanned": "scanned" };
+
+  function renderScanner(scanner) {
+    $("scanner").hidden = !scanner;
+    if (!scanner) return;
+    const status = $("scan-status");
+    status.textContent = scanner.connected ? scanner.status : "OBS not connected";
+    status.className = "pill " + (scanner.connected ? (STATUS_CLASS[scanner.status] || "") : "down");
+    $("scan-problem").hidden = !scanner.problem;
+    $("scan-problem").textContent = scanner.problem || "";
+    if (!scanner.captures.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = `Hold a card up to ${scanner.source} and keep it steady for a moment.`;
+      $("captures").replaceChildren(li);
+      return;
+    }
+    $("captures").replaceChildren(...scanner.captures.slice(0, 5).map(c => {
+      const li = document.createElement("li");
+      const what = document.createElement("div");
+      what.className = "what";
+      const n = document.createElement("div");
+      n.className = "n";
+      n.textContent = "Scanned card";
+      const m = document.createElement("div");
+      m.className = "m";
+      m.textContent = `${new Date(c.at).toLocaleTimeString()} · sharpness ${c.sharpness.toFixed(2)}`;
+      what.append(n, m);
+      const add = document.createElement("button");
+      add.type = "button"; add.textContent = "Add";
+      add.onclick = () => { attach(c.crop); $("name").focus(); };
+      const dismiss = document.createElement("button");
+      dismiss.type = "button"; dismiss.textContent = "Dismiss";
+      dismiss.onclick = () => {
+        if ($("crop").value === c.crop) attach(null);
+        api(`/captures/${c.id}/dismiss`).catch(e => say(e.message, "error"));
+      };
+      li.append(thumb(c.crop), what, add, dismiss);
+      return li;
+    }));
+  }
+
   function render(state) {
+    renderScanner(state.scanner);
     const totals = state.totals.length ? state.totals : [{ currency: "USD", amount: "0" }];
     $("amount").replaceChildren(...totals.map((t, i) => {
       const el = document.createElement(i ? "small" : "span");
@@ -175,6 +254,7 @@
       b.type = "button";
       b.textContent = scan.voided ? "Restore" : "Remove";
       b.onclick = () => api(`/scans/${scan.id}/${scan.voided ? "restore" : "void"}`).catch(e => say(e.message, "error"));
+      if (scan.crop) li.append(thumb(scan.crop, "thumb small"));
       li.append(what, p, b);
       return li;
     }));
@@ -187,6 +267,7 @@
       const scan = await api("/scans", data);
       say(`Added ${scan.name}, ${money(scan.price, scan.currency)}`, "ok");
       for (const f of ["name", "set_name", "number", "variant", "price"]) $(f).value = "";
+      attach(null);
       $("name").focus();
     } catch (err) { say(err.message, "error"); }
   };

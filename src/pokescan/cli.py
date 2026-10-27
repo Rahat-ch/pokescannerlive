@@ -61,6 +61,45 @@ async def cmd_bench(args) -> int:
     return 0
 
 
+async def cmd_capture(args) -> int:
+    """Save full-resolution frames of a source, for tuning detection and the eval set."""
+    import time
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    async with Obs(obs_settings()) as obs:
+        count = round(args.seconds * args.hz)
+        print(f"capturing {count} frames of {args.source!r} into {args.out}...", file=sys.stderr)
+        start = time.monotonic()
+        for i in range(count):
+            await asyncio.sleep(max(0.0, start + i / args.hz - time.monotonic()))
+            (args.out / f"{args.prefix}{i:04d}.jpg").write_bytes(await obs.screenshot(args.source, quality=92))
+    print(f"saved {count} frames", file=sys.stderr)
+    return 0
+
+
+def cmd_replay(args) -> int:
+    """Run the scanner's decisions over captured frames, to tune it without a camera."""
+    import cv2
+
+    from pokescan.detect import CardDetector, ensure_model
+    from pokescan.scanner import replay
+
+    frames = sorted(args.frames.glob("*.jpg"))
+    detector = CardDetector(ensure_model(args.data_dir))
+    if args.out:
+        args.out.mkdir(parents=True, exist_ok=True)
+    fired = 0
+    for i, status, verdict, crop in replay(detector, frames, args.hz):
+        mark = f"  <- {verdict.value}" if verdict else ""
+        print(f"{frames[i].name}  {status:<18}{mark}")
+        if crop is not None:
+            fired += 1
+            if args.out:
+                cv2.imwrite(str(args.out / f"scan-{fired:02d}-{frames[i].stem}.jpg"), crop)
+    print(f"{fired} scans from {len(frames)} frames")
+    return 0
+
+
 def cmd_serve(args) -> int:
     import logging
 
@@ -75,11 +114,21 @@ def cmd_serve(args) -> int:
     store = SessionStore(args.data_dir / "pokescan.db")
     token = load_token(args.data_dir)
     base = f"http://127.0.0.1:{args.port}"
+    scanner = None
+    crops_dir = args.data_dir / "crops"
+    if args.source:
+        from pokescan.detect import CardDetector, ensure_model
+        from pokescan.scanner import Scanner
+
+        scanner = Scanner(obs_settings(), args.source, CardDetector(ensure_model(args.data_dir)), crops_dir)
+        print(f"scanning OBS source {args.source!r}")
+    else:
+        print("scanning off: add --source <OBS camera input> to scan held-up cards")
     print(f"session {store.session_id}, started {store.started_at()}")
     print(f"overlay (OBS Browser Source, at your canvas size): {base}/overlay?token={token}")
     print(f"control (OBS Docks → Custom Browser Docks): {base}/control?token={token}")
     try:
-        web.run_app(make_app(store, token), host="127.0.0.1", port=args.port, print=None)
+        web.run_app(make_app(store, token, scanner, crops_dir), host="127.0.0.1", port=args.port, print=None)
     finally:
         store.close()
     return 0
@@ -100,16 +149,32 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--save-samples", type=Path, help="directory to save one poll and one full-res frame")
     bench.set_defaults(func=cmd_bench)
 
+    capture = sub.add_parser("capture", help="save full-resolution frames of a source")
+    capture.add_argument("--source", required=True)
+    capture.add_argument("--out", type=Path, required=True)
+    capture.add_argument("--seconds", type=float, default=10)
+    capture.add_argument("--hz", type=float, default=2)
+    capture.add_argument("--prefix", default="frame-")
+    capture.set_defaults(func=cmd_capture)
+
+    replay_ = sub.add_parser("replay", help="run the scanner over captured frames")
+    replay_.add_argument("frames", type=Path, help="directory of frames from `pokescan capture`")
+    replay_.add_argument("--hz", type=float, default=2, help="rate the frames were captured at")
+    replay_.add_argument("--out", type=Path, help="directory to save the scanned crops")
+    replay_.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan")
+    replay_.set_defaults(func=cmd_replay)
+
     serve = sub.add_parser("serve", help="run the overlay and control dock for a stream")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--data-dir", type=Path, default=Path.home() / ".pokescan",
                        help="where the session database and URL token live")
     serve.add_argument("--verbose", action="store_true", help="log every request")
+    serve.add_argument("--source", help="OBS camera input to scan for held-up cards (see `pokescan sources`)")
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
-    if args.func is cmd_serve:
-        return cmd_serve(args)
+    if args.func in (cmd_serve, cmd_replay):
+        return args.func(args)
     try:
         return asyncio.run(args.func(args))
     except ObsError as e:
