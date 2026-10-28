@@ -143,8 +143,9 @@ def cmd_serve(args) -> int:
         from pokescan.detect import CardDetector, ensure_model
         from pokescan.scanner import Scanner
 
-        scanner = Scanner(obs_settings(), args.source, CardDetector(ensure_model(args.data_dir)), crops_dir)
-        print(f"scanning OBS source {args.source!r}")
+        scanner = Scanner(obs_settings(), args.source, CardDetector(ensure_model(args.data_dir)), crops_dir,
+                          rotate=args.rotate)
+        print(f"scanning OBS source {args.source!r}" + (f", turned {args.rotate}°" if args.rotate else ""))
         keys = credentials.scrydex(args.data_dir)
         if keys and ocr.available():
             from pokescan.identify import Identifier
@@ -219,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="where the session database and URL token live")
     serve.add_argument("--verbose", action="store_true", help="log every request")
     serve.add_argument("--source", help="OBS camera input to scan for held-up cards (see `pokescan sources`)")
+    serve.add_argument("--rotate", type=int, choices=(0, 90, 180, 270), default=0,
+                       help="turn the camera's frames clockwise before scanning, for a camera mounted sideways or upside down")
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)

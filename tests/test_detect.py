@@ -120,3 +120,15 @@ def test_ensure_model_refuses_a_corrupt_download(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="corrupt"):
         ensure_model(tmp_path, log=lambda *_: None)
     assert not any((tmp_path / "models").iterdir())
+
+
+def test_frames_from_an_upside_down_camera_are_turned_upright():
+    from pokescan.scanner import decode
+
+    frame = np.zeros((40, 60, 3), np.uint8)
+    frame[:10, :10] = 255  # a mark at the top left
+    jpeg = cv2.imencode(".jpg", frame)[1].tobytes()
+    assert decode(jpeg)[:10, :10].mean() > 200
+    turned = decode(jpeg, 180)
+    assert turned.shape == frame.shape and turned[-10:, -10:].mean() > 200 and turned[:10, :10].mean() < 50
+    assert decode(jpeg, 90).shape == (60, 40, 3)

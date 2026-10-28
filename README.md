@@ -10,7 +10,7 @@ Needs [uv](https://docs.astral.sh/uv/) and OBS 28 or later.
 uv run pokescan serve --source Camera
 ```
 
-`--source` is your OBS camera input (`uv run pokescan sources` lists them); leave it out to enter cards by hand only. The first run downloads the card detection model (108 MB) into `~/.pokescan/models/`.
+`--source` is your OBS camera input (`uv run pokescan sources` lists them); leave it out to enter cards by hand only. If the camera is mounted sideways or upside down (an iPhone on a tripod, say), add `--rotate 90`, `180` or `270` so the scanner turns its frames upright; rotate the source in the OBS scene to match. Start the server before OBS, or refresh the overlay source after. The first run downloads the card detection model (108 MB) into `~/.pokescan/models/`.
 
 It prints two URLs. Both carry a token that stays the same between runs, so you only set OBS up once.
 

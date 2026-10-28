@@ -30,11 +30,16 @@ POLL_HZ_IDLE = 2.0
 POLL_HZ_CARD = 5.0
 
 
-def decode(jpeg: bytes) -> np.ndarray:
+# Turning frames clockwise, for a camera mounted on its side or upside down. OBS's own
+# rotation of the source in a scene doesn't reach its screenshots, so the scanner turns them itself.
+ROTATIONS = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def decode(jpeg: bytes, rotate: int = 0) -> np.ndarray:
     frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
         raise ValueError("OBS sent an image that isn't a JPEG")
-    return frame
+    return frame if ROTATIONS[rotate] is None else cv2.rotate(frame, ROTATIONS[rotate])
 
 
 @dataclass
@@ -83,8 +88,11 @@ class Capture:
 
 class Scanner:
     def __init__(self, settings: ObsSettings, source: str, detector: CardDetector, crops_dir: Path,
-                 on_change: Callable[[], None] = lambda: None):
+                 on_change: Callable[[], None] = lambda: None, rotate: int = 0):
+        if rotate not in ROTATIONS:
+            raise ValueError(f"rotate must be one of {sorted(ROTATIONS)}")
         self.settings = settings
+        self.rotate = rotate
         self.source = source
         self.detector = detector
         self.crops_dir = crops_dir
@@ -155,7 +163,7 @@ class Scanner:
         while True:
             started = time.monotonic()
             try:
-                small = decode(await obs.screenshot(self.source, width=POLL_WIDTH, quality=80))
+                small = decode(await obs.screenshot(self.source, width=POLL_WIDTH, quality=80), self.rotate)
             except ObsError as e:
                 if "(702)" not in str(e):
                     raise
@@ -173,7 +181,7 @@ class Scanner:
             await asyncio.sleep(max(0.0, started + 1 / hz - time.monotonic()))
 
     async def _look(self, obs: Obs, now: float, polled: Detection) -> None:
-        full = decode(await obs.screenshot(self.source, quality=92))
+        full = decode(await obs.screenshot(self.source, quality=92), self.rotate)
         look = await asyncio.to_thread(close_look, self.detector, full, polled)
         card_print = await asyncio.to_thread(fingerprint, look.crop)
         if self.trigger.judge(now, look.sharpness, card_print) is Verdict.FIRE:
