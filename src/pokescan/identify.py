@@ -184,27 +184,42 @@ class Identifier:
         text = await asyncio.to_thread(self.read_card, self.crops_dir / capture.crop)
         log.info("read %s: name=%r hp=%s number=%s/%s", capture.crop, text.name, text.hp, text.number, text.total)
         self.scanner.update(capture, name=text.name)
-        if not text.name:
+        try:
+            numbered = await self._by_number(text)
+        except ScrydexError:
+            numbered = None
+        if not text.name and numbered is None:
             self.scanner.update(capture, state="unknown", message="Couldn't read the name. Type the card in.")
             return
-        try:
-            ranked = rank(await self._pool(text), text, self.stream_sets())
-            ranked = await self._compare_art(capture, ranked)
-        except ScrydexError as e:
-            self.scanner.update(capture, state="unknown", message=f"{e} Type the card in.")
-            return
-        if not ranked or ranked[0][0] < 0.5:
-            self.scanner.update(capture, state="unknown", message=f"No card called {text.name!r} found. Type it in.")
-            return
-
         alternatives = None
-        if not is_confident(ranked):
-            if (alternatives := lookalikes(ranked)) is None:
-                self.scanner.update(capture, state="pick card", candidates=[summary(c) for _, c in ranked[:3]],
-                                    message="Which one is it?")
+        if not text.name:
+            best = numbered
+        else:
+            try:
+                ranked = rank(await self._pool(text), text, self.stream_sets())
+                if numbered is not None and (not ranked or ranked[0][1].get("id") != numbered["id"]):
+                    # The name of a card behind can peek out above the one held up; the number
+                    # at the bottom is always the front card's. The artwork settles which it is.
+                    pair = [(1.0, numbered)] + ([(1.0, ranked[0][1])] if ranked else [])
+                    ranked = await self._compare_art(capture, pair)
+                    log.info("name %r and number %s/%s disagree: chose %s", text.name, text.number, text.total,
+                             ranked[0][1].get("name"))
+                else:
+                    ranked = await self._compare_art(capture, ranked)
+            except ScrydexError as e:
+                self.scanner.update(capture, state="unknown", message=f"{e} Type the card in.")
                 return
-            log.info("best guess for %s among %d lookalikes", text.name, len(alternatives))
-        card = summary(ranked[0][1])
+            if not ranked or ranked[0][0] < 0.5:
+                self.scanner.update(capture, state="unknown", message=f"No card called {text.name!r} found. Type it in.")
+                return
+            if numbered is None and not is_confident(ranked):
+                if (alternatives := lookalikes(ranked)) is None:
+                    self.scanner.update(capture, state="pick card", candidates=[summary(c) for _, c in ranked[:3]],
+                                        message="Which one is it?")
+                    return
+                log.info("best guess for %s among %d lookalikes", text.name, len(alternatives))
+            best = ranked[0][1]
+        card = summary(best)
         if self._last == (capture.presentation, card["card_id"]):
             log.info("dropped %s: same card as the last one, never lowered", capture.crop)
             self.scanner.dismiss(capture.id)
@@ -295,6 +310,19 @@ class Identifier:
                 break
         ranked = rank(self._remember(cards), CardText(text, None, None, None), self.stream_sets())
         return [summary(c) for _, c in ranked[:8]]
+
+    async def _by_number(self, text: CardText) -> dict | None:
+        """The one card in the packs' sets with exactly the number and set size read off the card."""
+        if not (text.number and text.total):
+            return None
+        matches = []
+        for set_id in self.stream_sets():
+            matches += [c for c in await self.scrydex.expansion_cards(set_id)
+                        if digits_off(text.total, (c.get("expansion") or {}).get("printed_total")) == 0
+                        and digits_off(text.number, c.get("number")) == 0]
+        if len({c["id"] for c in matches}) != 1:
+            return None
+        return self._remember(matches[:1])[0]
 
     async def _pool(self, text: CardText) -> list[dict]:
         cards, sets = [], self.stream_sets()
